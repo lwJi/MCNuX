@@ -1,0 +1,47 @@
+# MCNuX specifications
+
+This `specs/` set is the durable contract for **MCNuX**, a GPU-friendly Monte Carlo neutrino transport code implemented as a Cactus thorn on the CarpetX driver, with Monte Carlo packets carried by the AMReX particle module and weak-interaction opacities/EOS quantities evaluated through the WeakLibInterp library. It is written to drive a **Ralph loop**: a long-running loop in which a *fresh* agent re-reads the specs on every iteration with no memory of prior runs. Each spec pins down *what "correct" means and how to verify it* while leaving *how to implement it* open.
+
+Open any single spec file in isolation: it is self-contained. The two cross-cutting specs (`conventions-and-units`, `rng-and-statistical-acceptance`) carry the shared notation/units and stochastic-correctness contracts; every leaf spec restates only the conventions it uses and references those two for the rest. **This README is the canonical source if a leaf spec ever conflicts with it.**
+
+## Provenance policy (restate-and-pin)
+
+Every governing physics equation is written out **in full** in the spec that uses it, in the corpus's own single notation. Citations to the published Monte Carlo transport papers (Foucart 2018 [arXiv:1708.08452](https://arxiv.org/abs/1708.08452), Foucart et al. 2020 [arXiv:2008.08089](https://arxiv.org/abs/2008.08089), Foucart et al. 2021 [arXiv:2103.16588](https://arxiv.org/abs/2103.16588), Miller, Ryan & Dolence 2019 (nubhlight) [arXiv:1903.09273](https://arxiv.org/abs/1903.09273), Richers et al. 2015 (Sedonu) [arXiv:1507.03606](https://arxiv.org/abs/1507.03606), Richers et al. 2017 [arXiv:1706.06187](https://arxiv.org/abs/1706.06187)) are carried as **provenance only**: on any conflict between spec text and a cited paper, the spec text is normative. (This policy exists because the 2020 and 2021 Foucart papers use the same symbol α with opposite meanings in the optically-thick opacity-relabeling scheme; the corpus pins the 2021 convention exclusively, with an explicit warning in the trapped-regime spec.) Technical contracts are pinned to specific files in the five local reference repositories: `amrex`, `warpx`, `CarpetX`, the Cactus `flesh`, and `WeakLibInterp`.
+
+## Global correctness contract (inherited by every spec)
+
+- **Units and conventions.** Spacetime, coordinates, and packet transport use geometrized units `G = c = M_sun = 1`; microphysics uses ρ in `g/cm^3` and temperatures/neutrino energies in `MeV`. The binding defining constants, derived conversion factors, metric signature (−,+,+,+), 3+1 variable naming mapped to ADMBaseX/HydroBaseX, and the caller-side `log10` conventions for WeakLibInterp opacity calls live in [conventions-and-units](./conventions-and-units.md).
+- **Neutrino species.** Exactly three effective species: νe, ν̄e, and νx, where νx represents the four heavy-lepton species (νμ, ν̄μ, ντ, ν̄τ) with degeneracy factor `g = 4` folded in at packet creation and zero net lepton number. The binding enumeration is in [conventions-and-units](./conventions-and-units.md).
+- **Deterministic tolerance tiers** (mixed relative/absolute comparison `|got − expected| <= rtol·|expected| + atol`, with `atol = 1e-30` unless a spec states otherwise):
+  - **Machine-precision exactness** — `~1e-14` (a few ULP) — for checks with closed-form exact answers: unit-conversion identities, flat-spacetime propagation, algebraic invariants.
+  - **Golden/parity** — `rtol = 1e-12` — for fixed-seed, single-rank CPU golden regression outputs, matching the Cactus test harness default `ABSTOL = RELTOL = 1e-12`.
+  - **Relaxed** — `1e-10` — for quantities that accumulate rounding: long integration round-trips, order-nondeterministic reductions (GPU atomic deposition, MPI sums), deterministic conservation tally identities. A spec invokes this tier only with a stated rationale.
+  - **Exact / no tolerance** — for integer outcomes: species labels, error codes, event counts at pinned seeds in single-rank CPU mode, requirement-id closure.
+- **Statistical acceptance bar.** Monte Carlo outcomes are accepted within **4σ** two-sided bands at pinned packet counts and pinned RNG seeds. The band recipe, the pinned counts and seeds, and the pinned-seed discipline (a 4σ failure at a pinned seed is investigated, never reseeded away) live in [rng-and-statistical-acceptance](./rng-and-statistical-acceptance.md), which every domain spec cites.
+- **Conservation contract.** Conservation checks come in two forms, and every conservation requirement in a leaf spec states which it uses: *deterministic tally identities* (what packets tallied equals what the grid received, a bookkeeping identity independent of sampling noise) hold at the relaxed tier `1e-10` relative to the corresponding gross exchange; *sampled physical budgets* (e.g. emitted minus absorbed energy vs. fluid heating over a run) hold at the 4σ statistical bar.
+- **Reproducibility policy.** The random-number contract is a stateless counter-based generator keyed on (seed, packet id, event counter), so every packet's random stream is independent of execution order, rank layout, and device. Bitwise reproducibility of per-packet event sequences is required **only** in single-rank CPU test mode (this is what makes fixed-seed golden outputs work); grid tallies produced by atomic deposition are reproducible only to floating-point-reduction tolerance. See [rng-and-statistical-acceptance](./rng-and-statistical-acceptance.md).
+- **Verification harness.** Correctness is checked through the Cactus regression harness (parameter file + same-named golden output directory, numeric diff at `ABSTOL = RELTOL = 1e-12`) with CarpetX TSV line-cuts and norm tables as reference output, plus standalone unit checks for host-testable kernels. Statistical N-sigma checks are expressed as norm-based margin assertions computed by an analysis routine so they also reduce to numeric golden data. The harness design and the corpus-wide coverage matrix live in [verification-suite-design](./verification-suite-design.md); every correctness-requirement id declared by a spec must appear there (closure is enforced mechanically by the validator).
+
+## Spec index
+
+| Spec | Description | Status |
+|---|---|---|
+| [conventions-and-units](./conventions-and-units.md) | Cross-cutting notation/units contract: metric signature and index conventions, 3+1 variable naming mapped to ADMBaseX/HydroBaseX, defining constants and conversion factors, WeakLibInterp caller-side `log10` and per-channel temperature-unit facts, the binding species enumeration {νe, ν̄e, νx}, packet component nomenclature. | committed |
+| [rng-and-statistical-acceptance](./rng-and-statistical-acceptance.md) | Cross-cutting stochastic-correctness contract: stateless counter-based RNG keyed on (seed, packet id, event counter), single-rank CPU reproducibility, the 4σ acceptance-band recipe, pinned packet counts and seeds. | committed |
+| [verification-suite-design](./verification-suite-design.md) | The verification suite as a contract: Cactus regression harness format, TSV/norm golden data, statistical checks as runtime-gated margin assertions, and the corpus-wide coverage matrix every requirement id must appear in. | committed |
+
+The corpus grows by phases toward one spec per topic: packet representation and sampling, geodesic propagation, neutrino–matter interactions, trapped-regime treatment, opacity/EOS evaluation, hydro-coupling source terms, particle container and GPU execution, CarpetX thorn integration, and build/integration. A topic not linked above is **not yet specified** — the validator (`tools/validate_specs.sh`) enforces that this index links *exactly* the spec files on disk (no orphan spec files, no missing links, no broken links), so the table above is always the complete current contract.
+
+## Validating the spec set
+
+`bash tools/validate_specs.sh` runs the mechanical conformance check: every registered spec carries the 7 mandated sections in order and names at least one concrete numeric tolerance; every cited `amrex/`, `warpx/`, `CarpetX/`, `flesh/`, or `WeakLibInterp/` source-of-truth path resolves to a real file under the corresponding local repository root; the README index links exactly the on-disk spec set; per-spec required-claim strings are present; and every correctness-requirement id declared by a spec appears in the [verification-suite-design](./verification-suite-design.md) coverage matrix, and vice versa (bidirectional closure).
+
+The five repository roots are overridable via environment variables (`MCNUX_AMREX_ROOT`, `MCNUX_WARPX_ROOT`, `MCNUX_CARPETX_ROOT`, `MCNUX_FLESH_ROOT`, `MCNUX_WEAKLIBINTERP_ROOT`); when unset, the validator probes sibling checkouts and the standard local locations and fails loudly if a root cannot be resolved.
+
+The 7 mandated sections, in order, that every registered spec must contain:
+
+```text
+## Purpose & scope → ## Source of truth → ## Inputs & outputs →
+## Correctness requirements → ## Verification → ## Implementation freedom →
+## Open questions / assumptions
+```
