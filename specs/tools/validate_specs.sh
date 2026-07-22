@@ -114,6 +114,7 @@ REGISTERED_SPECS=(
   "particle-container-and-gpu.md"
   "carpetx-thorn-integration.md"
   "verification-suite-design.md"
+  "build-and-integration.md"
 )
 
 # Per-spec fixed-string claims, expressed as "specfile|||needle". The needle (a fixed
@@ -264,6 +265,17 @@ SPEC_REQUIRE_IN_SPEC=(
   "verification-suite-design.md|||Coverage matrix"
   "verification-suite-design.md|||m < 0"
   "verification-suite-design.md|||SKIP"
+  "build-and-integration.md|||REQUIRES CarpetX WeakLibInterp"
+  "build-and-integration.md|||one AMReX per executable"
+  "build-and-integration.md|||AMREX_DIR"
+  "build-and-integration.md|||WEAKLIBINTERP_DIR"
+  "build-and-integration.md|||no \`.cu\` files"
+  "build-and-integration.md|||make.code.defn"
+  "build-and-integration.md|||RunTest.pl"
+  "build-and-integration.md|||wli_value_type_size() == 8"
+  "build-and-integration.md|||TestWeakLibInterp"
+  "build-and-integration.md|||ABSTOL = RELTOL = 1e-12"
+  "build-and-integration.md|||SKIP"
 )
 
 # --------------------------------------------------------------------------------------
