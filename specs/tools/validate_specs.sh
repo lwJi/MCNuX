@@ -225,6 +225,25 @@ SPEC_REQUIRE_IN_SPEC=(
   "carpetx-thorn-integration.md|||advance exactly once per coarsest-level Δt"
   "carpetx-thorn-integration.md|||CarpetX::use_subcycling = no"
   "carpetx-thorn-integration.md|||are an anti-pattern for GPU particle operators and are not adopted"
+  # neutrino-matter-interactions: the restated Eq. 24 anchor (in the corpus's [0,1)
+  # draw mapping), the discrete-absorption phrase, and the elastic-outcome phrase.
+  "neutrino-matter-interactions.md|||Δt_{s,a} = −ln(1 − u_{s,a}) p^t/(κ_{s,a} ν)"
+  "neutrino-matter-interactions.md|||removed entirely (no continuous weight decay)"
+  "neutrino-matter-interactions.md|||at fixed fluid-frame energy ν"
+  # trapped-regime-treatment: the D8-mandated needles in the binding 2021 α
+  # convention, EXACT codepoints (′ U+2032 PRIME, − U+2212 MINUS SIGN — an ASCII
+  # lookalike must not satisfy these), plus the flip-warning and limit phrases.
+  "trapped-regime-treatment.md|||η′ = αη"
+  "trapped-regime-treatment.md|||κ_a′ = ακ_a"
+  "trapped-regime-treatment.md|||κ_s′ = κ_s + (1−α)κ_a"
+  "trapped-regime-treatment.md|||κ_a′Δt"
+  "trapped-regime-treatment.md|||the letter's α is this corpus's 1−α"
+  "trapped-regime-treatment.md|||α → 1 reproduces the explicit scheme"
+  # hydro-coupling-source-terms: the zero-then-add protocol phrase, the corpus-derived
+  # 8-point cell-to-vertex average, and the MeV interface requirement on the partner.
+  "hydro-coupling-source-terms.md|||zeroed at one schedule point, accumulated into by contributors, and only then read"
+  "hydro-coupling-source-terms.md|||eT(v) += Σ_{d∈{0,1}³} q(v − d)/8"
+  "hydro-coupling-source-terms.md|||populates HydroBaseX::temperature in MeV"
 )
 
 # Per-spec snapshot-structure assertions, "specfile|||snapshot.h5ls|||needle": the needle
