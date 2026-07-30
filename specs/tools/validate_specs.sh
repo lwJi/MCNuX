@@ -196,12 +196,43 @@ SPEC_REQUIRE_IN_SPEC=(
   "rng-and-statistical-acceptance.md|||1296518744"
   "rng-and-statistical-acceptance.md|||20260730"
   "rng-and-statistical-acceptance.md|||10.1145/2063384.2063405"
+  # opacity-eos-evaluation: Kelvin at every temperature argument (incl. NES/Pair),
+  # the νx mapping literals, Brem weights, and the g-placement prohibition.
+  "opacity-eos-evaluation.md|||× 1.160451812e10"
+  "opacity-eos-evaluation.md|||including NES/Pair"
+  "opacity-eos-evaluation.md|||κ_a(νx, E) = 0"
+  "opacity-eos-evaluation.md|||η(νx, E) = 0"
+  "opacity-eos-evaluation.md|||κ_s(νx, E) = ½ [κ_s(νe, E) + κ_s(ν̄e, E)]"
+  "opacity-eos-evaluation.md|||28/3"
+  "opacity-eos-evaluation.md|||never in per-species transport coefficients"
+  # geodesic-propagation: restated-equation anchors (Eqs. 25-26 + null closure).
+  "geodesic-propagation.md|||dx^i/dt = γ^{ij} p_j/p^t − β^i"
+  "geodesic-propagation.md|||dp_i/dt = −α (∂_i α) p^t + (∂_i β^k) p_k − ½ (∂_i γ^{jk}) p_j p_k/p^t"
+  "geodesic-propagation.md|||p^t = √(γ^{ij} p_i p_j)/α"
+  # packet-representation-and-sampling: restated-equation anchors (Eqs. 18-19) and
+  # the g = 4 exactly-once-at-creation rule.
+  "packet-representation-and-sampling.md|||N_p = g_s √−g ΔV Δt η_b(s)/E_p"
+  "packet-representation-and-sampling.md|||p^{μ′} = ν (1, sinθ cosφ, sinθ sinφ, cosθ)"
+  "packet-representation-and-sampling.md|||g = 4"
+  "packet-representation-and-sampling.md|||exactly once, at packet creation"
 )
 
 # Per-spec snapshot-structure assertions, "specfile|||snapshot.h5ls|||needle": the needle
 # must appear in the named committed snapshot under the resolved WeakLibInterp root AND
 # the spec must cite that snapshot's table by name. Grows by append as specs land.
 SPEC_REQUIRE_IN_SNAPSHOT=(
+  # opacity-eos-evaluation: the structural claims of the five-family contract and the
+  # νx mapping — EOS chemical potentials (Kirchhoff closure), exactly-two electron-type
+  # species datasets (EmAb + Iso), the NES/Pair EtaGrid + species-less Kernels, and
+  # Brem's single S_sigma dataset with (rho, T) trailing axes.
+  "opacity-eos-evaluation.md|||wl-EOS-SFHo-15-25-50.h5ls|||/DependentVariables/Electron\\ Chemical\\ Potential Dataset {30, 81, 185}"
+  "opacity-eos-evaluation.md|||wl-Op-SFHo-15-25-50-E40-EmAb.h5ls|||/EmAb/Electron\\ Neutrino Dataset {30, 81, 185, 40}"
+  "opacity-eos-evaluation.md|||wl-Op-SFHo-15-25-50-E40-EmAb.h5ls|||/EmAb/Electron\\ Antineutrino Dataset {30, 81, 185, 40}"
+  "opacity-eos-evaluation.md|||wl-Op-SFHo-15-25-50-E40-Iso.h5ls|||/Scat_Iso_Kernels/Electron\\ Neutrino Dataset {30, 81, 185, 2, 40}"
+  "opacity-eos-evaluation.md|||wl-Op-SFHo-15-25-50-E40-NES.h5ls|||/EtaGrid/Values          Dataset {120}"
+  "opacity-eos-evaluation.md|||wl-Op-SFHo-15-25-50-E40-NES.h5ls|||/Scat_NES_Kernels/Kernels Dataset {120, 81, 4, 40, 40}"
+  "opacity-eos-evaluation.md|||wl-Op-SFHo-15-25-50-E40-Pair.h5ls|||/Scat_Pair_Kernels/Kernels Dataset {120, 81, 4, 40, 40}"
+  "opacity-eos-evaluation.md|||wl-Op-SFHo-15-25-50-E40-Brem.h5ls|||/Scat_Brem_Kernels/S_sigma Dataset {81, 185, 1, 40, 40}"
 )
 
 # Repo-prefixed reference-path token pattern (extension-anchored, plus bare README files).
