@@ -1,0 +1,13 @@
+.tasks
+.research
+.build
+.ralph
+
+.claude/settings.local.json
+
+*.pyc
+.vscode
+tags
+
+# Riptide artifacts (cloud-synced)
+.humanlayer/tasks/
