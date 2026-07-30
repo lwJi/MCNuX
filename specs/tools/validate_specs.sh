@@ -215,6 +215,16 @@ SPEC_REQUIRE_IN_SPEC=(
   "packet-representation-and-sampling.md|||p^{μ′} = ν (1, sinθ cosφ, sinθ sinφ, cosθ)"
   "packet-representation-and-sampling.md|||g = 4"
   "packet-representation-and-sampling.md|||exactly once, at packet creation"
+  # particle-container-and-gpu: the pure-SoA layout pin and the anti-pattern warning.
+  "particle-container-and-gpu.md|||ParticleContainerPureSoA"
+  "particle-container-and-gpu.md|||are an anti-pattern for GPU particle operators and are not adopted"
+  # carpetx-thorn-integration: the hard driver dependency, the observable cadence
+  # contract, the single-rate pin, and the same anti-pattern warning (required
+  # verbatim in BOTH technical specs).
+  "carpetx-thorn-integration.md|||REQUIRES CarpetX"
+  "carpetx-thorn-integration.md|||advance exactly once per coarsest-level Δt"
+  "carpetx-thorn-integration.md|||CarpetX::use_subcycling = no"
+  "carpetx-thorn-integration.md|||are an anti-pattern for GPU particle operators and are not adopted"
 )
 
 # Per-spec snapshot-structure assertions, "specfile|||snapshot.h5ls|||needle": the needle
