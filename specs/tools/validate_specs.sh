@@ -244,6 +244,21 @@ SPEC_REQUIRE_IN_SPEC=(
   "hydro-coupling-source-terms.md|||zeroed at one schedule point, accumulated into by contributors, and only then read"
   "hydro-coupling-source-terms.md|||eT(v) += Σ_{d∈{0,1}³} q(v − d)/8"
   "hydro-coupling-source-terms.md|||populates HydroBaseX::temperature in MeV"
+  # verification-suite-design: the TestMCNuX native extension idiom (SHARES + EXTENDS
+  # KEYWORD against both base thorns) and the coverage-matrix identity phrase.
+  "verification-suite-design.md|||SHARES: ADMBaseX"
+  "verification-suite-design.md|||EXTENDS KEYWORD initial_data"
+  "verification-suite-design.md|||SHARES: HydroBaseX"
+  "verification-suite-design.md|||EXTENDS KEYWORD initial_hydro"
+  "verification-suite-design.md|||the closure list"
+  # build-and-integration: the pinned test ThornList members, the WeakLibInterp
+  # dependency declaration, and the test/production activation split.
+  "build-and-integration.md|||CarpetX/ODESolvers"
+  "build-and-integration.md|||WeakLibInterp/WeakLibInterp"
+  "build-and-integration.md|||MCNuX/MCNuX"
+  "build-and-integration.md|||MCNuX/TestMCNuX"
+  "build-and-integration.md|||REQUIRES WeakLibInterp"
+  "build-and-integration.md|||never activates \`TestMCNuX\`"
 )
 
 # Per-spec snapshot-structure assertions, "specfile|||snapshot.h5ls|||needle": the needle
