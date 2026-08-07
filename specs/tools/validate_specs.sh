@@ -239,6 +239,14 @@ SPEC_REQUIRE_IN_SPEC=(
   "trapped-regime-treatment.md|||κ_a′Δt"
   "trapped-regime-treatment.md|||the letter's α is this corpus's 1−α"
   "trapped-regime-treatment.md|||α → 1 reproduces the explicit scheme"
+  # trapped-regime-treatment: the rewritten diffusion scheme (TRP-06..10) — one
+  # needle per id, EXACT codepoints (′ U+2032, − U+2212, → U+2192, · U+00B7 — an
+  # ASCII lookalike must not satisfy these).
+  "trapped-regime-treatment.md|||κ_s′ Δt′_rem > τ_diff"                 # TRP-06 criterion
+  "trapped-regime-treatment.md|||k = 0 → P"                             # TRP-07 map head
+  "trapped-regime-treatment.md|||F(r̃(P)) = P · F(r̃_max) / (1 − p_ns)"  # TRP-08 normalized law
+  "trapped-regime-treatment.md|||f_free = r_d / Δt′_rem"                # TRP-09 split fraction
+  "trapped-regime-treatment.md|||((B−1)/(B+1))^r"                       # TRP-10 θ₂ law core
   # hydro-coupling-source-terms: the zero-then-add protocol phrase, the corpus-derived
   # 8-point cell-to-vertex average, and the MeV interface requirement on the partner.
   "hydro-coupling-source-terms.md|||zeroed at one schedule point, accumulated into by contributors, and only then read"
