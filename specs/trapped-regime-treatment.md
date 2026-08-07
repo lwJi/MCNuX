@@ -57,8 +57,10 @@ The relabeling, its stability analysis, and the practical control are restated i
 below (normative per `README.md`) from the pinned 2021 implementation paper. The
 diffusion-approximation scheme is restated with the 2021 paper's §2.6 as the
 procedural baseline and the 2018 methods paper supplying the pieces the 2021 paper
-cites without restating — the θ₂/B(f_free) momentum model (its Eqs. 34–35) and the
-fluid-advection provenance (its Eqs. 31–33); this corpus restates the scheme in
+carries by citation only — the B(f_free) table (its Eq. 35; the 2021 paper restates
+the θ₂ functional form but cites the 2018 paper for the table) and the closed-form
+fluid-advection algebra (its Eqs. 31–33; the 2021 paper restates the null-momentum
+construction but not that algebra); this corpus restates the scheme in
 dimensionally explicit geometrized form (spec text normative, per `README.md`). The
 θ₂ law and its B(f_free) fit were certified from the typeset arXiv:1708.08452v2 PDF
 per the README's escalation path; the verbatim transcription record is
@@ -183,8 +185,10 @@ the correlated momentum redraw that finish the step.
   cell, whatever its optical depth, a packet's step begins in the ordinary discrete
   event loop of [neutrino-matter-interactions](./neutrino-matter-interactions.md)
   ([MCNX-INT-01..06]) on the active coefficients. After **each performed scattering
-  event** ([MCNX-INT-04]), the diffusion criterion is evaluated in the cell where
-  that scattering occurred, over the time remaining in the step:
+  event** ([MCNX-INT-04]) — every performed scattering, not only the step's first,
+  which is the papers' letter (recorded deviation below) — the diffusion criterion
+  is evaluated in the cell where that scattering occurred, over the time remaining
+  in the step:
 
   ```text
   κ_s′ Δt′_rem > τ_diff ,        Δt′_rem = Δt_rem/u^t
@@ -208,7 +212,10 @@ the correlated momentum redraw that finish the step.
   the episode consumes all remaining step time — and a packet that performs no
   scattering during the step never enters the diffusion regime; packets created
   mid-step participate through the discrete loop from their creation time per
-  [MCNX-INT-02].
+  [MCNX-INT-02]. The episode contains **no absorption channel**: none of its five
+  draws ([MCNX-TRP-07]) is an absorption time, and a packet is never removed during
+  the diffusion remainder — the 2018 paper's Δt_a draw is omitted (recorded
+  deviation below).
 
 - **[MCNX-TRP-08] Two-branch displacement law (restated, normative; provenance
   arXiv:1708.08452 Eqs. 27–30; arXiv:2103.16588 Eqs. 36–42).** A single uniform draw
@@ -498,6 +505,52 @@ are declared here and covered by the
   rate (`κ_a′ + κ_s′ = κ_a + κ_s`, [MCNX-TRP-02]), and the criterion must see the
   same coefficient that drives the displacement sampling. Under the explicit scheme
   (or α = 1) the two readings coincide.
+- **Resolution logged: criterion evaluated after every performed scattering
+  (deviation from the source papers' letter, spec text normative per `README.md`).**
+  Both papers state the diffusion check once, after the **first** scattering of the
+  step (the 2021 paper's §2.6: propagate "to the first scattering event (if any)",
+  perform it, then test the criterion on the remaining time). [MCNX-TRP-06]
+  evaluates the criterion after **each** performed scattering. In a static uniform
+  cell the two rules are behaviorally identical: `Δt_rem` only shrinks between
+  scatterings, so a criterion that failed after the first scattering fails after
+  every later one in the same cell. They diverge only when a later scattering of the
+  step occurs in a more scattering-dominated cell — exactly the situation the
+  diffusion treatment exists for; the literal first-scattering rule would deny the
+  treatment to packets that walk into thick cells mid-step and would special-case
+  one event in an otherwise uniform loop. The generalization keeps a single rule at
+  every [MCNX-INT-04] event (one evaluation site, uniform control flow), consumes no
+  draws (the criterion is deterministic), and leaves the α → 1 bitwise equivalence
+  of [MCNX-TRP-05] untouched.
+- **Resolution logged: no absorption draw during the diffusion episode (the two
+  cited sources disagree; resolution pinned here per `README.md`, spec text
+  normative).** The 2018 paper's §2.3.6 draws a new absorption time `Δt_a` alongside
+  the diffusion displacement, evolves the packet by `min(Δt, Δt_a)`, and removes
+  absorbed packets; the 2021 paper's §2.6 — the declared procedural baseline —
+  contains no absorption draw, no κ_a, and no packet removal anywhere in the
+  section. This corpus follows the baseline: the diffusion episode consumes the full
+  `Δt_rem` with the five draws of [MCNX-TRP-07], none an absorption time, and a
+  packet is never absorbed during the diffusion remainder ([MCNX-TRP-06]). Why this
+  is admissible on this corpus's own terms: (i) under the relabeling, the dominant
+  trapped-regime absorption component is not dropped but **folded** — the `(1−α)κ_a`
+  component sits inside `κ_s′` ([MCNX-TRP-02]) and therefore participates in the
+  criterion and the displacement sampling as effective scattering, standing in for
+  absorption + re-emission per [MCNX-TRP-02]'s recorded physical basis; a `Δt_a`
+  draw against the full κ_a (the 2018 letter, written for the un-relabeled scheme)
+  would double-count exactly that component. (ii) The **residual** true-absorption
+  channel `κ_a′ = ακ_a` is suspended only for the remainder, and it is precisely the
+  channel the stability design forces to be per-step small — `κ_a′Δt ≤ 1/(1 + β̃)`
+  (Eq. 48) and the enforced control `κ_a′Δt_c ≤ ξ` ([MCNX-TRP-04]) — in a
+  criterion-passing cell (`κ_s′ Δt′_rem > τ_diff`, well inside the trapped regime),
+  where residual absorption followed by re-emission is near-neutral at equilibrium
+  (the same near-equilibrium validity conditions as the lepton-number assumption
+  below). (iii) Absorption remains fully live everywhere else: every
+  discrete-prelude episode draws the absorption channel
+  ([MCNX-INT-02]/[MCNX-INT-06], `u_a` consumed each episode; [MCNX-INT-03] removal),
+  so the omission is scoped strictly to post-criterion step remainders. Honest edge:
+  under the explicit scheme (α = 1) nothing is folded and κ_a is not α-controlled,
+  so the omission in an explicit-scheme thick cell rests on the near-equilibrium
+  argument alone; the equilibration benchmark and `trp-overlap-consistency` are the
+  arbiters, per this corpus's standing practice.
 - **Assumption: relabeling and lepton number.** Relabeled "scattering" (the (1−α)κ_a
   component) exchanges no lepton number, while the absorption + re-emission it stands
   in for would exchange lepton number with zero net expectation at equilibrium — the
