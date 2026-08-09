@@ -241,7 +241,7 @@ gate results. Statistical checks output their standardized deviations as numeric
   | `minkowski-freestream` | Minkowski, pinned initial packets, zero opacities | straight lines at `\|dx/dt\| = 1`, `p_i` constant to machine tier per step, flat-spacetime exactness of [geodesic-propagation](./geodesic-propagation.md) [MCNX-GEO-04] |
   | `schwarzschild-pt` | `TestMCNuX` `"Schwarzschild"` (M = 1), domain in `r > M/2`, no interactions; pinned trajectory family at isotropic `r ∈ [6M, 10M]`, integrated for `T = 100M` at resolution `h = M/16`; per-packet `p_t` written as TSV | `p_t` drift `\|p_t(T) − p_t(0)\|/\|p_t(0)\| ≤ 1e-5` for every trajectory at the pinned resolution (design bound — see Open questions); companion legs at `Δt, Δt/2, Δt/4` show convergence order ≥ 2 of the drift ([MCNX-GEO-04], [MCNX-GEO-05]) |
   | `emission-fixedseed` | equilibration box, analytic mode, one emission-only step | exact packet set (ids, states) golden; bin-center energies; count law; creation draw-map audit ([packet-representation-and-sampling](./packet-representation-and-sampling.md) [MCNX-PKT-05]) |
-  | `interactions-fixedseed` | uniform sphere, analytic mode, pinned small population, several steps; per-packet event log written as TSV | episode structure and draw-map audits ([MCNX-INT-06], [MCNX-TRP-07]), discreteness, elasticity identities, id retirement, ledger closure per step |
+  | `interactions-fixedseed` | uniform sphere, analytic mode, pinned small population, several steps; per-packet event log written as TSV | episode structure and draw-map audits ([MCNX-INT-06]; the constant five-draw diffusion audit of [MCNX-TRP-07]), the diffusion leg (prelude handoff and regime decision on Δt′_rem per [MCNX-TRP-06], causal cap, two-leg position update), discreteness, elasticity identities, id retirement, ledger closure per step |
   | `ownership-multibox` | Minkowski, ≥ 2 boxes per rank, packets crossing box boundaries | after-step ownership invariant, bounded-motion audit, one-invocation-per-(patch, level) scheduling counter ([MCNX-GPU-05], [MCNX-GPU-06], [MCNX-CTX-03]) |
   | `cadence-lag` | uniform sphere, analytic mode, with ODESolvers evolving a trivial state; transport-step counter and source-tally checksums as norms | transport advances exactly once per `CCTK_EVOL` iteration; injected fluid step-change at iteration n first affects source reads at n+1; checkpoint/recovery leg reproduces partner-visible values ([MCNX-CTX-05], [MCNX-HYD-01], [MCNX-HYD-03]) |
   | `trp-alpha-limit-explicit` / `trp-alpha-limit-relabeled` | equilibration box, analytic mode; the second parfile enables the relabeling with the fixed-α override pinned to α = 1 | the α → 1 limit check of [trapped-regime-treatment](./trapped-regime-treatment.md) [MCNX-TRP-05]: both parfiles are diffed against the **same golden numbers** (generated from the explicit run), so any divergence at α = 1 fails the harness at 1e-12 |
@@ -267,7 +267,13 @@ gate results. Statistical checks output their standardized deviations as numeric
   event counts and post-scatter isotropy), `stats-equilibration-explicit` /
   `stats-equilibration-relabeled` (spectrum and energy density against the analytic
   `J_eq` of [MCNX-VER-05], the relabeled leg at α < 1 with a measured event-count
-  reduction), and `stats-diffusion` (truncated displacement-distribution moments).
+  reduction), `stats-diffusion` (atom frequency vs `exp(−κ_s′ Δt′_rem)`;
+  continuous-branch r̃ moments vs the normalized truncated analytic moments; sampled
+  cos θ₂ distribution vs the restated θ₂ law of [MCNX-TRP-10]), and
+  `trp-overlap-consistency` (the trapped-regime harness pinned just above and just
+  below `τ_diff`; statistical comparison of the two populations' end-of-step
+  position and direction distributions — both share the discrete prelude of
+  [MCNX-TRP-06], so they differ only in how the step remainder is finished).
   Defaults `N_p = 1048576`, seed `1296518744` per
   [rng-and-statistical-acceptance](./rng-and-statistical-acceptance.md); a benchmark
   pinning different values documents them in its parfile.
@@ -367,8 +373,11 @@ names: benchmarks per [MCNX-VER-06]/[MCNX-VER-07]; `selftest:` legs of
 | [MCNX-TRP-03] | selftest: convention tripwire (monotonicity of κ_a′ and κ_s′ in α) |
 | [MCNX-TRP-04] | selftest: α-selection rule reproduction; per-cell `κ_a′Δt_c ≤ ξ` diagnostic in stats-equilibration-relabeled |
 | [MCNX-TRP-05] | trp-alpha-limit-explicit vs trp-alpha-limit-relabeled (identical golden numbers) |
-| [MCNX-TRP-06] | stats-diffusion (truncated-distribution moments); interactions-fixedseed diffusion leg (causal cap, position update) |
-| [MCNX-TRP-07] | interactions-fixedseed diffusion draw-map audit |
+| [MCNX-TRP-06] | interactions-fixedseed diffusion leg (prelude handoff, regime decision on Δt′_rem); trp-overlap-consistency |
+| [MCNX-TRP-07] | interactions-fixedseed diffusion draw-map audit (constant five draws) |
+| [MCNX-TRP-08] | stats-diffusion (atom frequency; r̃ moments); interactions-fixedseed (causal cap) |
+| [MCNX-TRP-09] | interactions-fixedseed diffusion leg (two-leg position update); machine-tier f_free-limit identities |
+| [MCNX-TRP-10] | stats-diffusion (cos θ₂ distribution); machine-tier atom identity (cos θ₂ = 1) |
 | [MCNX-OPA-01] | selftest: kernel parity — MCNuX values vs directly-invoked WeakLibInterp `_Point` kernels, bitwise, all five families |
 | [MCNX-OPA-02] | selftest: Kelvin call-boundary fixtures at every family (incl. NES/Pair) |
 | [MCNX-OPA-03] | selftest: log10-ownership fixtures (raw vs pre-logged argument parity) |
