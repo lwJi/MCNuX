@@ -63,8 +63,7 @@ fluid-advection algebra (its Eqs. 31–33; the 2021 paper restates the null-mome
 construction but not that algebra); this corpus restates the scheme in
 dimensionally explicit geometrized form (spec text normative, per `README.md`). The
 θ₂ law and its B(f_free) fit were certified from the typeset arXiv:1708.08452v2 PDF
-per the README's escalation path; the verbatim transcription record is
-`.tasks/fix-trapped-regime-treatment/06-source-certification-b-ffree.md`.
+per the README's escalation path.
 
 | Pinned id | Informational gloss |
 |---|---|
