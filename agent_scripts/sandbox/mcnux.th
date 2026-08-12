@@ -1,0 +1,31 @@
+# mcnux.th — the pinned MCNuX test ThornList (specs/build-and-integration.md
+# [MCNX-BLD-04], verbatim).
+#
+# This is a COMPILE list over an existing Cactus checkout (the
+# WeakLibInterp/cactus/wli.th precedent), not a GetComponents fetch list:
+# Compile-ETK copies it into configs/mcnux/ThornList. The flesh is the
+# checkout; every line below must resolve under $CACTUSX/arrangements/
+# (agent_scripts/sandbox/setup.sh creates the MCNuX and WeakLibInterp
+# arrangement symlinks).
+#
+# Membership is binding — removals are out of contract; production
+# configurations may extend it (see the spec's membership rationale).
+
+CactusBase/IOUtil
+ExternalLibraries/AMReX
+ExternalLibraries/HDF5
+ExternalLibraries/MPI
+ExternalLibraries/yaml_cpp
+ExternalLibraries/zlib
+CarpetX/ADMBaseX
+CarpetX/Arith
+CarpetX/CarpetX
+CarpetX/CarpetXRegrid
+CarpetX/HydroBaseX
+CarpetX/Loop
+CarpetX/ODESolvers
+CarpetX/Subcycling
+CarpetX/TmunuBaseX
+WeakLibInterp/WeakLibInterp
+MCNuX/MCNuX
+MCNuX/TestMCNuX

@@ -1,0 +1,7 @@
+# Configuration definitions for thorn TestMCNuX
+#
+# Per specs/build-and-integration.md [MCNX-BLD-02]: it writes CarpetX-driver
+# grid functions; no WeakLibInterp dependency — analytic initial data needs
+# no tables.
+
+REQUIRES CarpetX
