@@ -1,0 +1,9 @@
+# Configuration definitions for thorn MCNuX
+#
+# The binding dependency contract of specs/build-and-integration.md
+# [MCNX-BLD-02]: a configuration lacking either capability must fail at
+# configure time. MCNuX declares no dependency on any GRMHD or
+# spacetime-evolution thorn (GRMHD-agnosticism).
+
+REQUIRES CarpetX
+REQUIRES WeakLibInterp
