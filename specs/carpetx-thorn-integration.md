@@ -15,7 +15,9 @@ This spec pins how MCNuX exists as a Cactus thorn on the CarpetX driver:
   `Array4` views, centering from `indextype`), and the **three obligations** that
   travel with that idiom, stated as correctness requirements: `REQUIRES CarpetX`,
   level/global-mode scheduling for container-walking routines, and mandatory
-  READS/WRITES declarations.
+  READS/WRITES declarations — including the **pinned declaration convention** for the
+  foreign-thorn groups (`ADMBaseX::metric`, `HydroBaseX::rho`, …) MCNuX reaches through
+  `ghext` rather than through `CCTK_ARGUMENTS`.
 - The **transport cadence contract**, stated as observable behavior: transport is
   operator-split, once per fluid step, outside the RK substeps, consuming end-of-step
   fluid state and metric — with the **single-rate pin**
@@ -64,7 +66,40 @@ production GRMHD code is cited anywhere in this corpus. Reference artifacts:
   before the call (`poison_undefined_values`), CRC32 checksums over
   valid-but-undeclared data, validity updated after the call; and the schedule
   `OPTIONS` decode (`local` invokes a routine once per (patch, level, component) tile,
-  `level`/`global` invoke it exactly once).
+  `level`/`global` invoke it exactly once). Four further mechanics of the same file are
+  binding on the declaration convention below: `check_storage_clauses` (~lines
+  2115–2175) aborts via `CCTK_VERROR` when *any* READS/WRITES/INVALIDATES/SYNC clause
+  names a group without active STORAGE; `decode_clauses` (~lines 1025–1060) resolves
+  each clause entry to a *variable index* (`RDWR_entry::varindex`) and decodes the
+  region tag into interior/boundary/ghosts validity bits; the poison pass (~lines
+  2309–2352) poisons a written region **except** where the same routine also declares it
+  read (`provided & ~need`); and `InvalidateTimelevels` is deliberately **not** called in
+  the evolution loop (~lines 1948–1951, commented out "we want to use them in the next
+  iteration"), so non-evolved groups keep their validity across iterations.
+- The stack's live pattern for declaring clauses on another implementation's groups —
+  always `inherits:` plus a fully qualified `Implementation::group` clause:
+  `CarpetX/TestInterpolate/interface.ccl` (`INHERITS: CoordinatesX`, ~line 5) with
+  `CarpetX/TestInterpolate/schedule.ccl` (`OPTIONS: global` routines declaring
+  `READS: CoordinatesX::vertex_coords(everywhere)` / `cell_coords(everywhere)`,
+  ~lines 8–24) whose bodies reach that data by name through a driver service
+  (`CCTK_VarIndex("CoordinatesX::vcoordx")`, `Interpolate(...)`,
+  `CarpetX/TestInterpolate/src/test_vertex_interpolation.cxx` ~lines 17–19, 89) rather
+  than through the group's `CCTK_ARGUMENTS` pointers — the exact
+  declare-in-CCL/access-outside-the-argument-machinery precedent MCNuX needs;
+  `CarpetX/TestNorms/interface.ccl` (`inherits: Driver, CarpetXRegrid`, line 3) with
+  `CarpetX/TestNorms/schedule.ccl` (`WRITES: CarpetXRegrid::regrid_error(interior)`,
+  line 15); `CarpetX/PoissonX/interface.ccl` (~line 5) with
+  `CarpetX/PoissonX/schedule.ccl` (`READS: PDESolvers::point_type(everywhere)`, ~line
+  55); `CarpetX/BoxInBox/interface.ccl` with `CarpetX/BoxInBox/schedule.ccl` (~line 24);
+  `CarpetX/MovingBoxToy/schedule.ccl` (~lines 6–7). Across the whole CarpetX tree every
+  qualified `Implementation::group` clause occurs in a thorn that inherits that
+  implementation — there is no counterexample.
+- `CarpetX/ADMBaseX/schedule.ccl` — unconditional `STORAGE:` for `metric`/`lapse`/
+  `shift` (lines 3–8) and initial-data/gauge writers declaring `WRITES: …(everywhere)`
+  (lines 68–112); `CarpetX/HydroBaseX/schedule.ccl` — unconditional `STORAGE:` for the
+  fluid groups (lines 3–13) and the default `initial_hydro = "vacuum"` writer declaring
+  `WRITES: …(everywhere)` on all of them (lines 59–75). Both base thorns therefore
+  supply storage and everywhere-validity whenever they are active.
 - `CarpetX/CarpetX/configuration.ccl` — `PROVIDES CarpetX { }` is an **empty** block: a
   build-order capability, no headers or libraries;
   `CarpetX/TestProlongate/configuration.ccl` and
@@ -94,11 +129,29 @@ repositories above, so its citation registry is empty by construction.
 
 ### What MCNuX reads and writes on the grid
 
-| Variables | Owner | Centering | MCNuX role |
-|---|---|---|---|
-| `alp`, `betax…betaz`, `gxx…gzz` | ADMBaseX | vertex (default) | READS — metric gather ([geodesic-propagation](./geodesic-propagation.md)) |
-| `rho`, `temperature`, `Ye`, `velx…velz`, `eps`, `press` | HydroBaseX | `ccc` | READS — fluid state for opacities and tetrads (temperature in MeV, an interface requirement owned by [hydro-coupling-source-terms](./hydro-coupling-source-terms.md)) |
-| MCNuX source-term variables (G^μ, lepton source) | MCNuX | `ccc` | WRITES — defined in [hydro-coupling-source-terms](./hydro-coupling-source-terms.md); advanced once per transport step per [MCNX-CTX-05] |
+| Variables | Owner | Centering | Declared as ([MCNX-CTX-04]) | MCNuX role |
+|---|---|---|---|---|
+| `alp`, `betax…betaz`, `gxx…gzz` | ADMBaseX | vertex (default) | `READS: ADMBaseX::lapse(everywhere)`, `ADMBaseX::shift(everywhere)`, `ADMBaseX::metric(everywhere)` | READS — metric gather ([geodesic-propagation](./geodesic-propagation.md)) |
+| `rho`, `temperature`, `Ye`, `velx…velz`, `eps`, `press` | HydroBaseX | `ccc` | `READS: HydroBaseX::rho(everywhere)`, `…::vel(everywhere)`, `…::eps(everywhere)`, `…::press(everywhere)`, `…::temperature(everywhere)`, `…::Ye(everywhere)` | READS — fluid state for opacities and tetrads (temperature in MeV, an interface requirement owned by [hydro-coupling-source-terms](./hydro-coupling-source-terms.md)) |
+| MCNuX source-term variables (G^μ, lepton source) | MCNuX | `ccc` | `WRITES:` (and, for accumulating routines, also `READS:`) on MCNuX's own groups | WRITES — defined in [hydro-coupling-source-terms](./hydro-coupling-source-terms.md); advanced once per transport step per [MCNX-CTX-05] |
+
+`ADMBaseX::curv`/`dtlapse`/`dtshift` and `HydroBaseX::entropy`/`Bvec`/`Avecx…Avecz` are
+**not** touched by MCNuX and are therefore not declared (see [MCNX-CTX-04](c)).
+
+### Declared CCL surface
+
+`MCNuX/MCNuX/interface.ccl` declares `IMPLEMENTS: MCNuX` plus
+`INHERITS: ADMBaseX HydroBaseX` — the visibility that makes the qualified clauses above
+legal. Inheritance is a declaration-scope statement only: MCNuX still reaches the data
+through `ghext` per [MCNX-CTX-01], exactly as `TestInterpolate` inherits `CoordinatesX`
+yet reads that data by variable index through a driver service (Source of truth).
+Consequence: every MCNuX parameter file activates a thorn implementing ADMBaseX and one
+implementing HydroBaseX (the pinned ThornList of
+[build-and-integration](./build-and-integration.md) contains both). A build that also
+compiles the optional TmunuBaseX contributor
+([hydro-coupling-source-terms](./hydro-coupling-source-terms.md) [MCNX-HYD-06]) adds
+`INHERITS: TmunuBaseX` and the corresponding activation obligation — see
+[MCNX-CTX-04](e).
 
 ### Driver objects consumed (the grid-access surface)
 
@@ -138,13 +191,80 @@ specs pin them; MCNuX additionally *reads* `CarpetX::use_subcycling` (via the
   inside the driver's own tile loop, visiting tiles multiply. (`ODESolvers_Solve`'s
   `OPTIONS: level` is the stack precedent.)
 
-- **[MCNX-CTX-04] READS/WRITES declarations mandatory (obligation 3).** Every
-  scheduled MCNuX routine declares complete `READS:`/`WRITES:` clauses for every grid
-  variable it touches — regardless of the fact that [MCNX-CTX-01] reaches the data
-  pointers outside the flesh's argument machinery. The driver's validity machinery
-  (poisoning of written-but-undeclared-read regions, CRC32 checksums catching
-  undeclared writes, presync of invalid ghosts before declared reads) enforces these
-  declarations at runtime; an undeclared access is a hard error, not a silent hazard.
+- **[MCNX-CTX-04] READS/WRITES declarations mandatory, and how foreign groups are named
+  (obligation 3).** Every scheduled MCNuX routine declares complete `READS:`/`WRITES:`
+  clauses for every grid variable it touches — regardless of the fact that
+  [MCNX-CTX-01] reaches the data pointers outside the flesh's argument machinery. The
+  driver's validity machinery (poisoning of written-but-undeclared-read regions, CRC32
+  checksums catching undeclared writes, presync of invalid ghosts before declared reads)
+  enforces these declarations at runtime; an undeclared access is a hard error, not a
+  silent hazard. Because the groups MCNuX touches are owned by other thorns, the
+  declaration mechanism is **pinned here**, not left to the implementer:
+
+  - **(a) Inheritance-qualified naming (the convention).** `MCNuX/MCNuX/interface.ccl`
+    declares `INHERITS: ADMBaseX HydroBaseX`, and every clause on a group MCNuX does not
+    own uses the fully qualified `Implementation::group(region)` form —
+    `READS: ADMBaseX::metric(everywhere)`, `READS: HydroBaseX::rho(everywhere)`, and so
+    on per the I/O table. This is the stack's only live pattern for cross-implementation
+    clauses and it is universal there (Source of truth: TestInterpolate/CoordinatesX,
+    TestNorms and BoxInBox and TestProlongate/CarpetXRegrid, PoissonX/PDESolvers,
+    MovingBoxToy/BoxInBox — every qualified clause sits in a thorn that inherits that
+    implementation, with no counterexample). `INHERITS:` is a *declaration-visibility*
+    statement: it neither implies nor requires that MCNuX obtain the data through
+    `CCTK_ARGUMENTS`, and it does not weaken [MCNX-CTX-01] or [MCNX-CTX-07].
+
+  - **(b) One name, two uses.** The qualified string in a clause is character-for-
+    character the string the routine passes to `CCTK_GroupIndex`/`CCTK_VarIndex` when it
+    resolves the `ghext` lookup (`…leveldata[level].groupdata[gi]`) for that group.
+    Declaration and access therefore cannot drift, and the correspondence is
+    mechanically auditable (Verification). A group index obtained by any other route —
+    a hard-coded index, or a name assembled at run time from a parameter — is
+    non-compliant even if the numbers happen to agree.
+
+  - **(c) Regions are exactly the regions touched.** Fields gathered at packet positions
+    are declared `(everywhere)`: a gather stencil around a packet near a tile edge reads
+    that tile's ghost points, so interior-only validity is insufficient and the driver
+    must presync before the routine runs. Symmetrically, a group MCNuX does not touch is
+    not declared: an over-declared read makes the driver demand validity nothing in the
+    configuration provides and converts a correct run into a spurious validity abort.
+
+  - **(d) Accumulate-in-place requires both clauses.** With `poison_undefined_values`
+    the driver poisons every written region that the same routine does not also declare
+    as read. Any routine that accumulates (`+=`) into MCNuX's source-term variables
+    therefore declares them in **both** `READS:` and `WRITES:` with the same region; only
+    the zeroing routine of [hydro-coupling-source-terms](./hydro-coupling-source-terms.md)
+    declares `WRITES:` alone.
+
+  - **(e) Foreign groups are read-only, with one sanctioned exception.** The base-thorn
+    groups of the I/O table appear in `READS:` clauses and never in
+    `WRITES:`/`INVALIDATES:`. The single exception is the parameter-selected,
+    default-off TmunuBaseX contributor of
+    [hydro-coupling-source-terms](./hydro-coupling-source-terms.md) [MCNX-HYD-06], which
+    accumulates into TmunuBaseX's own variables through TmunuBaseX's own extension
+    group; a build that compiles it declares `INHERITS: TmunuBaseX` as well and names
+    those groups by the same qualified form, under the same rules (b)–(d) — in
+    particular the accumulate-in-place pair of (d). Whether that contributor exists at
+    all, and its default, stay owned by [MCNX-HYD-06]; only the naming and inheritance
+    mechanics are pinned here. Because `INHERITS:` cannot be parameter-conditional, a
+    build carrying the contributor requires TmunuBaseX active in every run of that
+    build.
+
+  - **(f) Storage and activation.** Every group named in any clause must have active
+    STORAGE at the moment the routine is called, or the driver aborts with its
+    storage-check error naming the group. ADMBaseX and HydroBaseX allocate their groups
+    unconditionally while active, so the obligation reduces to: both are active in every
+    MCNuX parameter file, and MCNuX declares no clause on a group whose owning thorn it
+    does not require.
+
+  - **(g) Fallback ladder, in binding order.** If the flesh in use rejects the primary
+    form, the implementation descends this ladder and records which rung it used:
+    (1) enumerate the variables instead of the group (`READS: ADMBaseX::gxx(everywhere)`
+    … `gzz(everywhere)`), which produces the identical per-variable clause entries;
+    (2) if a qualified foreign clause cannot be expressed at all, the affected routine is
+    **not scheduled** and the build or run fails loudly with a message naming the group.
+    Deleting a clause while keeping the access is never admissible: under every rung,
+    a routine touches no group it has not declared, and re-enabling an access that no
+    rung supports requires amending this spec.
 
 - **[MCNX-CTX-05] Transport cadence contract (observable behavior).** Transport is
   operator-split from the fluid/spacetime evolution, running **outside** the RK
@@ -206,6 +326,22 @@ specs pin them; MCNuX additionally *reads* `CarpetX::use_subcycling` (via the
   driver validity errors demonstrates the READS/WRITES declarations of [MCNX-CTX-04]
   are complete; a deliberately under-declared routine in a meta-test triggers the
   driver's checksum/poison error, proving the enforcement is live.
+- **Declaration/access name parity (exact, source sweep, non-harness gate).** Every
+  fully qualified group/variable name string passed to `CCTK_GroupIndex`/`CCTK_VarIndex`
+  on an MCNuX `ghext` lookup path occurs verbatim in a `READS:`/`WRITES:` clause of the
+  routine performing that lookup, and every foreign group declared in a clause is
+  actually looked up by the declaring routine — [MCNX-CTX-04](b)(c). The sweep exits
+  non-zero on either direction of mismatch, so both under-declaration and
+  over-declaration fail the build gate.
+- **Accumulate-in-place declaration (exact, meta-test).** A contributor routine that
+  declares only `WRITES:` on a source-term group it accumulates into must fail under
+  `poison_undefined_values` (the driver poisons the region before the call, so the `+=`
+  consumes poison); the compliant `READS:` + `WRITES:` form of [MCNX-CTX-04](d) completes
+  and reproduces the golden tally at `ABSTOL=RELTOL=1e-12`.
+- **Storage/activation gate (exact).** A parameter file that omits ADMBaseX or
+  HydroBaseX from `ActiveThorns` fails — at inheritance resolution or with the driver's
+  storage-check abort naming the group — while the pinned benchmark parameter files,
+  which activate both, run; this proves [MCNX-CTX-04](f) is enforced rather than assumed.
 - **Scheduling-mode check (exact).** On a pinned multi-box run (≥ 2 boxes per rank), a
   per-invocation counter in each container-walking routine shows exactly one invocation
   per (patch, level) traversal — not one per tile — confirming [MCNX-CTX-03].
@@ -218,7 +354,10 @@ the cadence phrase `advance exactly once per coarsest-level Δt`, and the anti-p
 phrase `are an anti-pattern for GPU particle operators and are not adopted`; that its
 cited `CarpetX/` and `flesh/` paths resolve; and that its `[MCNX-CTX-NN]` ids are
 declared here and covered by the
-[verification-suite-design](./verification-suite-design.md) matrix.
+[verification-suite-design](./verification-suite-design.md) matrix. The declaration
+convention of [MCNX-CTX-04] adds **no** validator needle: it is a claim about CCL text
+and driver behavior, verified by the source sweep and the runtime gates above, not by
+the spec-text linter.
 
 ## Implementation freedom
 
@@ -231,9 +370,19 @@ declared here and covered by the
 - How `CarpetX::use_subcycling` is read (`SHARES:`/`USES` vs `CCTK_ParameterGet`) and
   the wording of the paramcheck error.
 - Caching of object lookups (`amrcore`, group indices, `MultiFab` pointers) across the
-  step; per-patch vs fused iteration order over patches and levels.
+  step; per-patch vs fused iteration order over patches and levels — provided the cached
+  group index was obtained from the qualified name of [MCNX-CTX-04](b).
+- How the clauses are distributed over routines (one gather routine declaring all reads
+  vs several), and the names of MCNuX's own groups (owned by
+  [hydro-coupling-source-terms](./hydro-coupling-source-terms.md)).
 - MCNuX's own parameter names and defaults, diagnostics, and output cadence — except
   where sibling specs pin them.
+
+Explicitly **not** free: how `READS:`/`WRITES:` name foreign-thorn groups reached
+through `ghext`. That was previously an unstated gap and is now pinned by
+[MCNX-CTX-04](a)–(g) — `INHERITS: ADMBaseX HydroBaseX` plus fully qualified
+`Implementation::group(region)` clauses, with the fallback ladder as the only permitted
+deviation.
 
 ## Open questions / assumptions
 
@@ -256,6 +405,28 @@ declared here and covered by the
   thorns use the TODO-flagged relative include (`CarpetX/ODESolvers/src/solve.hxx`).
   MCNuX assumes this idiom remains available; a driver-side interface change would be
   an implementation migration, not a contract change.
+- **Assumption: the foreign-clause precedent is real but indirect (recorded).** An
+  earlier audit reported "no in-stack precedent" for [MCNX-CTX-04]'s convention; that
+  reading came from grepping only for `READS: ADMBaseX::` / `READS: HydroBaseX::`. The
+  pattern does exist, on other implementations and always paired with `inherits:`
+  (Source of truth), including one case — `TestInterpolate` — that declares a foreign
+  `(everywhere)` read on a non-local-mode routine and then reaches the data by name
+  through a driver service rather than through `CCTK_ARGUMENTS`. Residual risk: no
+  in-stack example names an ADMBaseX or HydroBaseX group, and the flesh's CST (which
+  decides whether a qualified clause is in scope) is not part of this checkout, so the
+  scope rule is inferred from the CarpetX consumer thorns rather than read from the
+  parser. [MCNX-CTX-04](g)'s ladder exists exactly for that residual risk, and the first
+  implementation to compile these clauses records which rung it used.
+- **Assumption: base-thorn validity survives into `CCTK_EVOL`.** MCNuX's transport group
+  runs `AT evol AFTER ODESolvers_Solve` and reads groups nothing evolves. This is
+  satisfiable because CarpetX does not invalidate non-evolved groups inside the
+  evolution loop (the `InvalidateTimelevels` call is commented out with the rationale
+  that `ODESolvers_PostStep` results must survive into the next iteration) and both base
+  thorns write their groups `(everywhere)` at initial data — so analytic-background
+  benchmarks with no live GRMHD partner satisfy MCNuX's `(everywhere)` reads. If a
+  driver revision re-enabled that invalidation, MCNuX's reads would have to be re-based
+  on a partner that rewrites those groups each step: an assumption change, not a change
+  to [MCNX-CTX-04].
 - **Assumption: ADMBaseX default centering.** The metric groups declare no
   `CENTERING`, and the driver default is vertex-centered — the same recorded
   assumption as [geodesic-propagation](./geodesic-propagation.md); a change would
