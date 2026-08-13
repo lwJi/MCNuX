@@ -67,18 +67,33 @@ and the CarpetX stack; the background formulas are corpus-derived closed forms
   deterministic TSV line-cut and norm-table writers (`out_tsv_vars`, `out_norm_vars`)
   whose outputs are the golden formats.
 - `CarpetX/WaveToyX/test/standing.par` — the worked harness example this suite's
-  parfiles mirror; `CarpetX/TestODESolvers/test/test.ccl` — the per-test tolerance
+  parfiles mirror (verified present in the reference checkout; its own `ActiveThorns`
+  block lists `CarpetX`, `IOUtil`, `ODESolvers`, and the physics thorn — the precedent
+  for the activation floor of [MCNX-VER-06]);
+  `CarpetX/TestODESolvers/test/test.ccl` — the per-test tolerance
   block precedent (any non-default tolerance carries an in-file justification).
 - `CarpetX/ADMBaseX/param.ccl` — ADMBaseX owns the RESTRICTED keywords `initial_data`
-  (default `"Cartesian Minkowski"`), `initial_lapse` (default `"one"`), `initial_shift`
-  (default `"zero"`); `CarpetX/ADMBaseX/schedule.ccl` — the `ADMBaseX_InitialData` and
+  (choices `"none"`, `"Cartesian Minkowski"` (default), `"linear wave"`),
+  `initial_lapse` (`"none"`, `"one"` (default)), `initial_shift` (`"none"`, `"zero"`
+  (default)); `CarpetX/ADMBaseX/schedule.ccl` — the `ADMBaseX_InitialData` and
   `ADMBaseX_InitialGauge` hook groups and the keyword-conditional scheduling of the
-  base thorn's own initializers. Minkowski needs no new code.
+  base thorn's own initializers. Minkowski needs no new code. **Both hook groups are
+  declared only inside the `if (CCTK_IsThornActive("ODESolvers"))` branch (schedule.ccl
+  lines 10–26); the `else` branch (lines 32–66) declares only `ADMBaseX_SetADMVars` /
+  `ADMBaseX_SetADMRHS`** — so anything scheduled `IN ADMBaseX_InitialData` or
+  `IN ADMBaseX_InitialGauge` has no group to bind to unless `ODESolvers` is active at
+  runtime.
 - `CarpetX/HydroBaseX/param.ccl` — HydroBaseX owns the RESTRICTED keyword
-  `initial_hydro` (sole base choice `"vacuum"`); `CarpetX/HydroBaseX/schedule.ccl` —
-  the `HydroBaseX_InitialData` hook group `TestMCNuX` schedules into;
-  `CarpetX/HydroBaseX/interface.ccl` — the cell-centered fluid variables the profiles
-  populate.
+  `initial_hydro` (sole base choice `"vacuum"`; **no `"none"` value exists**);
+  `CarpetX/HydroBaseX/schedule.ccl` —
+  the `HydroBaseX_InitialData` hook group `TestMCNuX` schedules into, which unlike its
+  ADMBaseX counterpart *does* carry an `AT initial` fallback in the no-ODESolvers `else`
+  branch (lines 15–27 vs 29–55), and the `"vacuum"` initializer
+  `HydroBaseX_initial_data` that writes every fluid variable `(everywhere)` inside that
+  group (lines 59–75); `CarpetX/HydroBaseX/interface.ccl` — the cell-centered fluid
+  variables the profiles populate. This ADMBaseX/HydroBaseX asymmetry is why a parfile
+  that forgets `ODESolvers` fails *silently and partially* (hydro data appears, metric
+  and lapse data do not) rather than erroring — see [MCNX-VER-06].
 - `flesh/lib/sbin/parameter_parser.pl` and `flesh/lib/sbin/ImpParamConsistency.pl` —
   the flesh's `EXTENDS KEYWORD` machinery (a sharing thorn adds ranges to another
   implementation's RESTRICTED keyword); external-extension evidence in the stack:
@@ -99,7 +114,7 @@ and the CarpetX stack; the background formulas are corpus-derived closed forms
 
 | Artifact | Location | Content |
 |---|---|---|
-| benchmark parameter files | `MCNuX/test/<name>.par` (the MCNuX thorn's `test/` directory; [build-and-integration](./build-and-integration.md) owns the location pin) | one per benchmark below; ActiveThorns line activates `TestMCNuX` where a non-trivial background is needed |
+| benchmark parameter files | `MCNuX/test/<name>.par` (the MCNuX thorn's `test/` directory; [build-and-integration](./build-and-integration.md) owns the location pin) | one per benchmark below; the `ActiveThorns` line always meets the activation floor of [MCNX-VER-06] (`CarpetX`, `IOUtil`, `ODESolvers`, `MCNuX`) and additionally activates `TestMCNuX` where a non-trivial background is needed |
 | golden data | `MCNuX/test/<name>/` | committed TSV line-cuts and `norms/*.tsv` tables produced by the CarpetX writers at the primary seed |
 | tolerance config | `MCNuX/test/test.ccl` | `NPROCS 1` for every test; per-test `TEST` blocks only where a non-default tolerance is justified in-file |
 | `TestMCNuX` thorn | sibling thorn in the MCNuX repository | initial-data extensions only ([MCNX-VER-02]); no transport physics, no output machinery of its own |
@@ -156,6 +171,42 @@ gate results. Statistical checks output their standardized deviations as numeric
     backgrounds use no `TestMCNuX` code at all: `ADMBaseX::initial_data` defaults to
     `"Cartesian Minkowski"` with lapse-one/shift-zero initializers scheduled by the
     base thorn itself.
+  - **Binding probe (the operational trigger for the fallback).** The extension idiom
+    is adopted only after it is *observed* to work, once, at first build of the pinned
+    test ThornList. The probe has three legs, all three of which must pass:
+    **(P1) parse** — the configuration containing `TestMCNuX`'s extending `param.ccl`
+    configures and compiles with no parameter-parser or implementation-consistency
+    error; **(P2) accept** — a probe parfile setting
+    `ADMBaseX::initial_data = "Schwarzschild"`,
+    `ADMBaseX::initial_lapse = "Schwarzschild"`, and
+    `HydroBaseX::initial_hydro = "uniform sphere"` starts without a
+    parameter-range/invalid-value abort; **(P3) bind** — the `TestMCNuX` writers
+    actually execute and their output *is* the closed form, not the base default:
+    `γ_xx` at a pinned point equals `ψ⁴` and `ρ` at the sphere center equals `ρ₀`, each
+    to the machine tier (`1e-14` relative). P3 is the check that makes a silent
+    fall-through to Minkowski/vacuum impossible: a non-binding extension leaves
+    `γ_xx = 1` and `ρ = 0`, which fails by many orders, not by a tolerance.
+  - **Pinned fallback (pre-authorized, not a spec change).** If any of P1–P3 fails,
+    `TestMCNuX` switches — for **both** base thorns at once, since the mechanism is
+    flesh-level and split adoption would fork the parfiles — to this exact shape:
+    `TestMCNuX` declares its **own** keywords (a spacetime selector and a hydro-profile
+    selector) whose values are the same binding strings `"Schwarzschild"`,
+    `"uniform sphere"`, `"equilibration box"` plus a `"none"` default, and gates the
+    same writers into the same hook groups on its own keywords instead. On the ADMBaseX
+    side the parfile then sets `ADMBaseX::initial_data = "none"` and
+    `ADMBaseX::initial_lapse = "none"` (both are existing base values) so no base
+    initializer competes; `initial_shift` stays `"zero"` (the exact Schwarzschild
+    shift). On the HydroBaseX side `initial_hydro` has **no** `"none"` value, so it
+    stays `"vacuum"` and the profile writer is scheduled
+    `IN HydroBaseX_InitialData AFTER HydroBaseX_initial_data`, overwriting the vacuum
+    values it wrote — an explicit ordering the schedule text must carry.
+    The switch is binding-neutral: the keyword *values*, the closed forms of
+    [MCNX-VER-03]/[MCNX-VER-04], the benchmark set, and all golden data are unchanged;
+    only the parameter's owning implementation prefix in the parfiles changes. Adopting
+    the fallback requires recording which probe leg failed as an in-file comment in
+    `TestMCNuX/param.ccl`; returning to the extension idiom later requires a fresh green
+    P1–P3. Anything beyond this shape (different keyword values, a different hook group,
+    a background not pinned here) *is* a spec change.
 
 - **[MCNX-VER-03] Schwarzschild background (exact formulas, normative).** The
   `"Schwarzschild"` initial data is the Schwarzschild solution of mass `M` in
@@ -233,7 +284,34 @@ gate results. Statistical checks output their standardized deviations as numeric
 
 - **[MCNX-VER-06] Deterministic benchmark set (binding).** The suite contains at
   least the following harness benchmarks, each fixed-seed (`1296518744`) and
-  single-rank, each archiving golden TSV/norm data at `ABSTOL=RELTOL=1e-12`:
+  single-rank, each archiving golden TSV/norm data at `ABSTOL=RELTOL=1e-12`.
+
+  **Activation floor (applies to every parfile in the table below and to every
+  `stats-*` parfile of [MCNX-VER-07], without exception).** Every benchmark parfile's
+  `ActiveThorns` line lists at least `CarpetX`, `IOUtil`, `ODESolvers`, and `MCNuX`,
+  plus `TestMCNuX` and the base thorns whose data it needs. `ODESolvers` is **not**
+  optional for the ODE-free benchmarks: `ADMBaseX_InitialData` and
+  `ADMBaseX_InitialGauge` are declared only inside
+  `if (CCTK_IsThornActive("ODESolvers"))` (`CarpetX/ADMBaseX/schedule.ccl` lines 10–26;
+  the `else` branch at 32–66 declares neither), and MCNuX's own transport group binds
+  `AT evol AFTER ODESolvers_Solve`
+  ([carpetx-thorn-integration](./carpetx-thorn-integration.md) [MCNX-CTX-03]) — so
+  without `ODESolvers` active neither the initial-data writers nor the transport step
+  have anything to bind to. The failure mode this closes is silent, not loud:
+  `HydroBaseX_InitialData` *does* have an `AT initial` fallback
+  (`CarpetX/HydroBaseX/schedule.ccl` lines 15–27 vs 29–55), so a parfile missing
+  `ODESolvers` can still produce fluid data and a plausible-looking run while the
+  metric, the lapse, and the entire transport step never execute. Two acceptance
+  criteria enforce the floor: a mechanical parfile audit (`gate:` — every `.par` under
+  `MCNuX/test/` names `ODESolvers` in `ActiveThorns`; a parfile that does not is a
+  suite failure regardless of whether its run exits zero), and a runtime
+  non-vacuity assertion in every benchmark — each run's golden data contains at least
+  one quantity that is identically the base default when its writer fails to bind
+  (`γ_xx = 1` where the pinned background gives `ψ⁴ ≠ 1`, a transport-step counter that
+  is `0` instead of one-per-`CCTK_EVOL`), so an unbound schedule fails the 1e-12 diff
+  instead of passing vacuously. `CarpetX/WaveToyX/test/standing.par` is the in-stack
+  precedent: it lists `ODESolvers` in `ActiveThorns` for a run whose physics thorn owns
+  no ODE state of its own.
 
   | Benchmark | Setup | Primary checks |
   |---|---|---|
@@ -312,6 +390,17 @@ shape and by mechanical closure:
   the benchmarks of [MCNX-VER-06]/[MCNX-VER-07] under `MCNuX/test/`; every parfile has
   its same-named golden directory; every test runs `NPROCS 1` and passes at the
   1e-12 defaults (or a justified per-test block).
+- **Activation floor (exact).** A mechanical audit reads every `MCNuX/test/*.par` and
+  asserts `ODESolvers` appears in its `ActiveThorns` list; zero exceptions, checked as a
+  gate rather than a run outcome, because an unbound schedule does not raise. Paired
+  with the per-benchmark non-vacuity quantity of [MCNX-VER-06]: at least one golden
+  number per benchmark differs from the base-default value the run would produce with
+  the writers or the transport group unbound.
+- **Extension binding (P1–P3, one-time, recorded).** The probe of [MCNX-VER-02] is run
+  once at first build; its three legs (parse, accept, bind) are pass/fail, and its
+  outcome selects the extension idiom or the pinned fallback. The bind leg is scored at
+  the machine tier (`1e-14` relative on `γ_xx = ψ⁴` and `ρ = ρ₀`), never by
+  eyeballing a schedule tree.
 - **Background closed forms (machine tier, `~1e-14`).** A `unit-selftest` leg
   evaluates the `TestMCNuX` writers' outputs at pinned grid points against the closed
   forms of [MCNX-VER-03]/[MCNX-VER-04]; on the Schwarzschild data it additionally
@@ -408,11 +497,11 @@ names: benchmarks per [MCNX-VER-06]/[MCNX-VER-07]; `selftest:` legs of
 | [MCNX-CTX-06] | gate: paramcheck-abort check (`use_subcycling = yes` aborts; `no` runs) |
 | [MCNX-CTX-07] | gate: inspection (interpolator execution model absent from MCNuX); mech: anti-pattern needle in both technical specs |
 | [MCNX-VER-01] | harness discovery gate: every benchmark is a discovered `<name>.par` + golden dir, `NPROCS 1`, 1e-12 defaults |
-| [MCNX-VER-02] | gate: `TestMCNuX` ccl inspection (extension idiom, keyword values, hook-group scheduling); backgrounds exercised by schwarzschild-pt and the hydro benchmarks |
+| [MCNX-VER-02] | gate: `TestMCNuX` ccl inspection (extension idiom, keyword values, hook-group scheduling); gate: the one-time P1–P3 binding probe (parse, accept, bind) selecting idiom or pinned fallback; backgrounds exercised by schwarzschild-pt and the hydro benchmarks |
 | [MCNX-VER-03] | selftest: Schwarzschild writer closed-form leg; schwarzschild-pt |
 | [MCNX-VER-04] | selftest: hydro-profile closed-form leg; stats-equilibration-explicit, stats-beam (profiles in use) |
 | [MCNX-VER-05] | selftest: analytic-mode identity legs; stats-emission νx leg; stats-equilibration pair |
-| [MCNX-VER-06] | harness run: the pinned benchmark set exists and passes; α-limit golden identity |
+| [MCNX-VER-06] | harness run: the pinned benchmark set exists and passes; α-limit golden identity; gate: activation-floor audit (`ODESolvers` in every parfile's `ActiveThorns`) + per-benchmark non-vacuity quantity |
 | [MCNX-VER-07] | statistical-reduction audit: every 4σ check appears as a z-score row with `\|z\| ≤ 4` in committed golden data |
 | [MCNX-VER-08] | mech: requirement-id closure (ownership, declaration, coverage; phantom rows rejected) on every validator run |
 | [MCNX-BLD-01] | gate: repository/arrangement layout audit; pinned ThornList compiles both thorns |
@@ -441,7 +530,12 @@ Correctness requirements section.
   row per check with measured error and pass flag".
 - `TestMCNuX` parameter names, defaults, and any additional analytic backgrounds or
   profile parameters — provided the pinned keyword values and formulas of
-  [MCNX-VER-02]–[MCNX-VER-04] are among them.
+  [MCNX-VER-02]–[MCNX-VER-04] are among them. Under the pinned fallback, the *names* of
+  `TestMCNuX`'s own selector keywords are free; their values are not.
+- How the P1–P3 binding probe and the activation-floor audit are packaged (a throwaway
+  probe parfile, a CI step, a shell one-liner over `MCNuX/test/*.par`) — the pass/fail
+  legs and the recording obligation are binding, the packaging is not; and every
+  benchmark's `ActiveThorns` line beyond the floor members of [MCNX-VER-06].
 - Benchmark grid extents, box placements, packet counts for the deterministic (non
   `stats-*`) runs, output cadences, and which variables beyond the pinned diagnostics
   are archived — once golden data is committed, these become pinned per benchmark by
@@ -455,15 +549,22 @@ Correctness requirements section.
 
 ## Open questions / assumptions
 
-- **Assumption: `EXTENDS KEYWORD` across repositories (recorded).** No thorn in the
-  CarpetX checkout itself uses `EXTENDS KEYWORD`, but the flesh implements it
+- **Assumption: `EXTENDS KEYWORD` across repositories (recorded, with a pinned exit).**
+  No thorn in the CarpetX or WeakLibInterp checkouts uses `EXTENDS KEYWORD` — a grep
+  across both trees returns zero matches, so there is no working syntax exemplar to
+  copy — but the flesh implements the mechanism
   (`flesh/lib/sbin/parameter_parser.pl`, range merging and the RESTRICTED-only rule in
   `flesh/lib/sbin/ImpParamConsistency.pl`), the extended keywords are RESTRICTED in
   the base thorns' param.ccl, and the stack's own parameter files reference externally
   extended values (`CarpetX/CarpetX/par/brill-lindquist-write.par` sets
-  `ADMBaseX::initial_data = "Brill-Lindquist"`). This spec relies on that mechanism;
-  if it regressed in the flesh, `TestMCNuX` would need a fallback (own keyword +
-  `"none"` base values), which would be a spec change here.
+  `ADMBaseX::initial_data = "Brill-Lindquist"`, a value no checked-out thorn declares).
+  This spec still prefers that mechanism, but no longer *depends* on it: the
+  consequence of it not working is pinned rather than deferred. The P1–P3 probe of
+  [MCNX-VER-02] is the trigger criterion (parse, accept, bind — all three, once, at
+  first build), and the fallback it selects is specified there in full, so switching is
+  an implementation decision to be recorded, not a spec change. What remains genuinely
+  open is only *which* branch the first build takes; the flesh is not present in the
+  research checkout, so the probe cannot be run from the spec side.
 - **Assumption: the `schwarzschild-pt` drift bound is a design bound.** The
   `1e-5`-relative bound at the pinned resolution (`h = M/16`, `T = 100M`,
   `r ∈ [6M, 10M]`) is set from the expected error budget of an order-≥ 2 integrator on
