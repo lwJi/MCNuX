@@ -30,7 +30,10 @@ Out of scope:
 - How the coefficients are consumed — event sampling and outcomes
   ([neutrino-matter-interactions](./neutrino-matter-interactions.md)); the
   trapped-regime relabeling η′/κ_a′/κ_s′
-  ([trapped-regime-treatment](./trapped-regime-treatment.md)).
+  ([trapped-regime-treatment](./trapped-regime-treatment.md)). This includes the
+  **geometrized conversion of the emitted triple**, which is applied consumer-side
+  ([MCNX-INT-01], [MCNX-PKT-02]) and never here; this spec owns only the pin that its
+  own output is physical-unit (see the coefficient interface below and [MCNX-OPA-04]).
 - Where the degeneracy factor g = 4 is applied — **exactly once, at packet creation**
   ([packet-representation-and-sampling](./packet-representation-and-sampling.md));
   it appears **never in per-species transport coefficients** (this spec owns that
@@ -107,9 +110,10 @@ for kernel semantics; on interpretation conflicts its precedence rule (*table > 
 ### Coefficient interface (what the rest of MCNuX sees)
 
 The observable product of this spec is the per-species transport-coefficient triple,
-evaluated at a fluid state and fluid-frame neutrino energy:
+evaluated at a fluid state and fluid-frame neutrino energy, **emitted in the microphysics
+(MeV + cgs) unit system**:
 
-| Symbol | Meaning | Units (microphysics system) |
+| Symbol | Meaning | Units as emitted (microphysics system) |
 |---|---|---|
 | κ_a(s, E) | absorption opacity, species s, fluid-frame energy E | cm⁻¹ |
 | κ_s(s, E) | elastic (isoenergetic) scattering opacity | cm⁻¹ |
@@ -120,10 +124,36 @@ dimensionless; species `s ∈ {νe, ν̄e, νx}` (indices 0, 1, 2); energy E in 
 interface is **source-agnostic**: a runtime parameter selects the production weaklib
 tables (this spec) or the analytic per-species η/κ_a/κ_s formulas (a first-class MCNuX
 capability; formulas and benchmarks pinned in
-[verification-suite-design](./verification-suite-design.md)). Everything below the
-interface in this spec concerns the table source. Conversion of κ and η to geometrized
-code units uses exactly the pinned factors of
-[conventions-and-units](./conventions-and-units.md).
+[verification-suite-design](./verification-suite-design.md), in these same physical
+units). Everything below the interface in this spec concerns the table source.
+
+#### Unit ownership: the conversion is applied **consumer-side** (binding)
+
+The units in the table above are exactly what a caller receives — **the coefficient
+interface never emits geometrized code units**. This layer applies no geometrized
+conversion factor anywhere: not in the WeakLibInterp call boundary, not in the baseline
+assembly of [MCNX-OPA-04], not in the νx mapping of [MCNX-OPA-05], not in the range
+policy of [MCNX-OPA-06], and not in the analytic source. `1.476625038e5` (and every
+other geometrized factor of [conventions-and-units](./conventions-and-units.md)) is
+absent from this spec's output path by construction, so a reader of any MCNuX opacity
+call site can tell the units of a returned value without tracing the call chain.
+
+Each consumer converts the values it received, once, at its own point of use — the
+pinned reciprocal statements already carry the factor:
+
+| Consumer | Converts | Where the factor lives |
+|---|---|---|
+| [neutrino-matter-interactions](./neutrino-matter-interactions.md) | κ_a, κ_s → code units, `κ[code] = κ[cm⁻¹] × 1.476625038e5` | inside the [MCNX-INT-01] interaction-time draw law (`Δt` is a code-unit coordinate time) |
+| [trapped-regime-treatment](./trapped-regime-treatment.md) | nothing of its own | the relabeling `η′/κ_a′/κ_s′` is a unit-homogeneous post-map on this interface's physical-unit values; its code-unit conversion happens downstream, in the INT draw law, exactly as for the unprimed values |
+| [packet-representation-and-sampling](./packet-representation-and-sampling.md) | bin-integrated `η_b(s)` (MeV cm⁻³ s⁻¹) | inside the [MCNX-PKT-02] count law, whose product is evaluated in one documented unit system |
+| [hydro-coupling-source-terms](./hydro-coupling-source-terms.md) | nothing of this triple | the ledger consumes packet content (already code-unit four-momenta), never κ or η directly |
+
+Because the factor is absent here and present in each consumer's own equation, the
+"applied exactly once" property is a **local** review check at each consumer: a
+double conversion can only arise from converting a value twice inside one consumer, and
+a missing conversion only from a consumer omitting its own step. Converted values are
+never fed back into this interface, and no consumer hands a code-unit coefficient to
+another consumer that would convert again.
 
 ### The five WeakLibInterp entry-point families (complete consumption surface)
 
@@ -219,6 +249,18 @@ species; NES/Pair `(nEp, nE, nMom, nT, nEta) = (40, 40, 4, 81, 120)`; Brem
   width of the tabulated energy grid. NES, Pair, and Brem are **not** assembled into
   baseline rates (structured open question below).
 
+  **Emitted units are physical, not geometrized (binding).** Every value produced by
+  this requirement, by the νx mapping of [MCNX-OPA-05], by the range policy of
+  [MCNX-OPA-06], and by the analytic source is in exactly the units annotated above —
+  κ in cm⁻¹, η in MeV cm⁻³ s⁻¹ MeV⁻¹ (η_b in MeV cm⁻³ s⁻¹). No geometrized conversion
+  is applied inside this layer; the consumer applies
+  `κ[code] = κ[cm⁻¹] × 1.476625038e5` (and the corresponding emissivity conversion of
+  [conventions-and-units](./conventions-and-units.md)) exactly once at its own point of
+  use, per the consumer table in Inputs & outputs. An implementation that returns
+  code-unit coefficients from this interface violates this requirement even if its own
+  numbers are self-consistent, because [MCNX-INT-01] and [MCNX-PKT-02] then convert a
+  second time.
+
 - **[MCNX-OPA-05] νx mapping (exact tier).** The production EmAb/Iso tables carry
   exactly two species datasets (`Electron Neutrino`, `Electron Antineutrino`); νx is
   untabulated. The binding mapping is:
@@ -280,7 +322,8 @@ species; NES/Pair `(nEp, nE, nMom, nT, nEta) = (40, 40, 4, 81, 120)`; Brem
   (+1, −1, 0); g = 4 never appears in this spec's outputs.
 - Opacity/emissivity → geometrized code-unit conversion uses exactly the pinned factor
   set of [conventions-and-units](./conventions-and-units.md) (κ[code] = κ[cm⁻¹] ×
-  1.476625038e5).
+  1.476625038e5) — and is performed **by the consumer**, downstream of this spec's
+  interface, never inside it ([MCNX-OPA-04]).
 - All reals are IEEE-754 binary64 (`double`), matching WeakLibInterp's pinned value
   type.
 
@@ -293,6 +336,16 @@ species; NES/Pair `(nEp, nE, nMom, nT, nEta) = (40, 40, 4, 81, 120)`; Brem
 - **Unit-boundary checks (machine tier, ~1e-14 relative).** The MeV→Kelvin conversion
   at each call site reproduces `T[MeV] × 1.160451812e10`; `η_e` computed both as
   `μ_e[MeV]/T[MeV]` and `μ_e/(k_B T[K])` agrees to machine tier.
+- **Emitted-unit check and double-conversion tripwire (machine tier + exact;
+  [MCNX-OPA-04]).** At pinned in-range states, the κ_a/κ_s the interface returns equal
+  the physical-unit reference values in cm⁻¹ to `1e-14` relative, in **both** source
+  modes — a code-unit return misses by the factor `1.476625038e5` (five orders of
+  magnitude) and cannot pass. Complementary source sweep (exact, non-harness): no
+  geometrized conversion factor is applied on this layer's evaluation, assembly, νx
+  mapping, or range-enforcement path; the conversion appears only at the consumer sites
+  named in Inputs & outputs, once each. A beam or interaction benchmark run with the
+  conversion applied twice (or zero times) fails its 4σ bar by orders of magnitude,
+  which is the end-to-end backstop for this pin.
 - **νx mapping identities (exact / machine tier).** `κ_a(νx, E) = 0` and `η(νx, E) = 0`
   exactly; `κ_s(νx, E)` equals the ½-mean of the two evaluated electron-type values to
   machine tier (`1e-14` relative) for every sample point.
@@ -337,6 +390,19 @@ matrix.
 
 ## Open questions / assumptions
 
+- **Closed decision: interface units are physical, conversion is consumer-side.**
+  Previously this spec stated physical units in its interface table while also naming
+  the geometrized conversion factors, leaving open whether this layer or its consumers
+  applied them. The decision is now pinned in Inputs & outputs and [MCNX-OPA-04]: **this
+  layer emits cm⁻¹ / MeV cm⁻³ s⁻¹ MeV⁻¹ and applies no geometrized factor; each consumer
+  converts once at its own point of use.** Grounding for that direction (not a free
+  choice): [MCNX-INT-01] already carries `κ[code] = κ[cm⁻¹] × 1.476625038e5` inside its
+  own draw law, [trapped-regime-treatment](./trapped-regime-treatment.md) records that
+  κ from this interface is "converted to geometrized code units downstream", and
+  [packet-representation-and-sampling](./packet-representation-and-sampling.md) consumes
+  η_b with its energy content in MeV. The alternative (emitting code units) would have
+  required amending all three. Any future change of this direction must amend those
+  specs in the same commit.
 - **NES/Pair/Brem rate assembly (structured open question, deliberately not resolved
   here).** The consumption contract for the NES, Pair, and Brem kernels is pinned above
   so the surface is complete, but their assembly into inelastic scattering / pair /
