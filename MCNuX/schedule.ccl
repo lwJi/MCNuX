@@ -1,1 +1,80 @@
 # Schedule definitions for thorn MCNuX
+
+# Paramcheck guard of specs/carpetx-thorn-integration.md [MCNX-CTX-06]. The
+# routine is scheduled unconditionally and branches on the parameter inside
+# its body, so that the abort is reached in exactly the configuration the
+# spec forbids. Global mode: the routine touches no grid data (hence no
+# READS:/WRITES: clauses) and must run exactly once.
+
+SCHEDULE MCNuX_ParamCheck AT CCTK_PARAMCHECK
+{
+  LANG: C
+  OPTIONS: global
+} "Abort when CarpetX subcycling is enabled (MCNuX transport is single-rate)"
+
+# Unit self-test battery of specs/verification-suite-design.md [MCNX-VER-06]
+# (the `unit-selftest` benchmark). Storage and scheduling are both guarded by
+# the parameter, so a production run carries neither the array nor the
+# routine; when the parameter is off the group has no storage and the TSV
+# writer skips it. Global mode: the battery is a rank-independent computation
+# over MCNuX's own compile-time code and must run exactly once. The WRITES:
+# clause is complete per [MCNX-CTX-04] — the routine touches no other grid
+# variable.
+
+if (run_selftests)
+{
+  STORAGE: mcnux_selftest
+
+  SCHEDULE MCNuX_SelfTest AT initial
+  {
+    LANG: C
+    OPTIONS: global
+    WRITES: MCNuX::mcnux_selftest(everywhere)
+  } "Run the MCNuX unit self-test battery"
+}
+
+STORAGE: mcnux_transport_diag
+
+# Transport-cadence contract of specs/carpetx-thorn-integration.md
+# [MCNX-CTX-05]: transport is operator-split from the fluid/spacetime
+# evolution and advances exactly once per coarsest-level Delta t, outside the
+# RK substeps, after the fluid step (including its ODESolvers_PostStep pass)
+# has completed. The canonical realization is the MCNuX-owned schedule group
+# below, AT evol AFTER ODESolvers_Solve. `IN ODESolvers_PostStep` (once per RK
+# stage) and `AT CCTK_POSTSTEP` (fragile interleaving with regridding and
+# analysis) were considered and rejected by the spec.
+#
+# Under the single-rate pin CarpetX::use_subcycling = no ([MCNX-CTX-06],
+# enforced by MCNuX_ParamCheck above) every level shares the coarsest-level
+# Delta t, so one CCTK_EVOL traversal is one transport step.
+
+SCHEDULE GROUP MCNuX_TransportStep AT evol AFTER ODESolvers_Solve
+{
+} "MCNuX transport step (operator-split, once per coarsest-level dt)"
+
+# Initialize the cadence counter before the first evolution step, so that the
+# observer's declared READS: below sees valid data on iteration 1. Global
+# mode: the routine touches only grid scalars and must run exactly once.
+
+SCHEDULE MCNuX_TransportInit AT initial
+{
+  LANG: C
+  OPTIONS: global
+  WRITES: MCNuX::transport_step_count(everywhere)
+} "Initialize the MCNuX transport-step counter"
+
+# The cadence observable: one increment and one log line per transport step.
+# Global mode per [MCNX-CTX-03] (the routine walks no tiles itself, and global
+# mode is what makes "exactly once per CCTK_EVOL traversal" observable rather
+# than once per (patch, level, component)). The READS:/WRITES: clauses are
+# complete per [MCNX-CTX-04]: the counter is the only grid variable touched —
+# the driver objects reached through ghext ([MCNX-CTX-01]) are inspected for
+# structure only, no grid data is read or written through them.
+
+SCHEDULE MCNuX_TransportObserver IN MCNuX_TransportStep
+{
+  LANG: C
+  OPTIONS: global
+  READS: MCNuX::transport_step_count(everywhere)
+  WRITES: MCNuX::transport_step_count(everywhere)
+} "Advance and report the MCNuX transport-step counter (cadence observable)"

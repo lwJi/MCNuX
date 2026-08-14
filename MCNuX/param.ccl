@@ -1,1 +1,26 @@
 # Parameter definitions for thorn MCNuX
+
+RESTRICTED:
+
+# Self-test battery switch of specs/verification-suite-design.md
+# [MCNX-VER-06]: the `unit-selftest` benchmark sets
+# MCNuX::run_selftests = yes, which runs the unit self-test battery once at
+# initial time and writes one row per named check (measured error, pass flag)
+# into the MCNuX::mcnux_selftest grid array. Off by default — the battery is
+# verification scaffolding, not part of a production transport run — and
+# STEERABLE=NEVER, because the battery's storage and scheduling are decided
+# from it at startup.
+
+BOOLEAN run_selftests "Run the MCNuX unit self-test battery at initial time" STEERABLE=NEVER
+{
+} "no"
+
+# Single-rate pin of specs/carpetx-thorn-integration.md [MCNX-CTX-06]: MCNuX
+# reads the driver's subcycling switch so that MCNuX_ParamCheck can abort a
+# run configured with CarpetX::use_subcycling = yes. The CarpetX driver thorn
+# IMPLEMENTS: Driver, so the sharing block targets the capability name Driver
+# (the live idiom of CarpetX/ODESolvers/param.ccl).
+
+SHARES: Driver
+
+USES BOOLEAN use_subcycling

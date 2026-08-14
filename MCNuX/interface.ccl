@@ -1,3 +1,40 @@
 # Interface definition for thorn MCNuX
 
 IMPLEMENTS: MCNuX
+
+# Transport-cadence diagnostics of specs/carpetx-thorn-integration.md
+# [MCNX-CTX-05]. The counter is an MCNuX-owned grid scalar (no INHERITS is
+# needed: MCNuX both reads and writes its own variable), so that the routines
+# of the transport-step group carry real READS:/WRITES: clauses and the
+# driver's validity machinery enforces [MCNX-CTX-04] at runtime. The counter
+# is the "transport-step counter" the cadence benchmark of
+# specs/verification-suite-design.md later consumes as a per-iteration norm.
+# It is checkpointed (the default): the count is part of the transport state,
+# so a recovered run must continue the same sequence.
+
+CCTK_INT mcnux_transport_diag TYPE=SCALAR
+{
+  transport_step_count
+} "MCNuX transport-cadence diagnostics (number of completed transport steps)"
+
+# Result table of the unit self-test battery, specs/verification-suite-design.md
+# [MCNX-VER-01]/[MCNX-VER-06]: "one row per named check (measured error, pass
+# flag)". A 1d grid array with one element per check is exactly that shape —
+# CarpetX's WriteTSVArrays emits one TSV line per array index, so the golden
+# file is literally the table of rows. DISTRIB=CONSTANT because the battery is
+# a global, rank-independent computation (every test runs NPROCS 1 anyway).
+#
+# The index -> name mapping is owned by, and documented in,
+# src/mcnux_selftest.cxx; that table is append-only, so SIZE grows (and the
+# golden data is regenerated) whenever a later task adds checks. The routine
+# cross-checks SIZE against its own table length at runtime, so the two cannot
+# drift silently.
+#
+# Not checkpointed: the battery is recomputed from nothing but code, so it is
+# not part of any evolved state.
+
+CCTK_REAL mcnux_selftest TYPE=ARRAY DIM=1 SIZE=36 DISTRIB=CONSTANT TAGS='checkpoint="no"'
+{
+  selftest_error
+  selftest_pass
+} "MCNuX unit self-test battery results (measured error and pass flag per check)"

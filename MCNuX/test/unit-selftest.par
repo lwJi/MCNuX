@@ -1,0 +1,55 @@
+# unit-selftest — the MCNuX unit self-test battery as a Cactus regression test.
+#
+# specs/verification-suite-design.md [MCNX-VER-06]: "Minkowski, no transport;
+# MCNuX::run_selftests = yes runs the self-test battery at initial time and
+# writes one row per named check (measured error, pass flag) as TSV". The
+# golden directory MCNuX/test/unit-selftest/ holds that TSV, diffed at the
+# harness defaults ABSTOL = RELTOL = 1e-12 ([MCNX-VER-01]).
+#
+# The background is flat: ADMBaseX::initial_data defaults to
+# "Cartesian Minkowski" with lapse-one/shift-zero initializers scheduled by the
+# base thorn itself, so TestMCNuX is deliberately NOT activated here
+# ([MCNX-VER-02]; ADMBaseX is not even needed, since the battery reads no grid
+# data). No packets exist and no transport step runs (cctk_itlast = 0), so the
+# run is deterministic without reference to the RNG seed: the battery's RNG
+# rows are known-answer vectors at pinned counters, not sampled draws.
+
+ActiveThorns = "
+    CarpetX
+    IOUtil
+    MCNuX
+"
+
+# Mandatory for any MCNuX run: CarpetX's own CCTK_PARAMCHECK routine rejects
+# every other presync mode.
+Cactus::presync_mode = "mixed-error"
+
+# The subject of this benchmark: run the battery once, at initial time.
+MCNuX::run_selftests = yes
+
+# The battery is a global computation over MCNuX's compile-time code; the grid
+# exists only because the driver needs one. Smallest useful box.
+CarpetX::ncells_x = 8
+CarpetX::ncells_y = 8
+CarpetX::ncells_z = 8
+
+# Initial time only — the battery is scheduled AT initial, and nothing is
+# evolved.
+Cactus::cctk_itlast = 0
+
+IO::out_dir = $parfile
+IO::out_every = 1
+IO::parfile_write = no
+
+# Keep the column-label header but drop IOUtil's creation date, hostname, and
+# absolute parameter-file path: those are comment lines (the harness skips
+# them when diffing), but they would make the committed golden file differ
+# from a fresh run in ways a reader cannot tell apart from a real change.
+IO::out_fileinfo = "axis labels"
+
+CarpetX::out_metadata = no
+
+# The one output that is golden data: one TSV row per named check.
+CarpetX::out_tsv_vars = "
+    MCNuX::mcnux_selftest
+"

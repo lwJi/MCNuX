@@ -1,0 +1,27 @@
+# Non-harness gate parfile: CarpetX subcycling DISABLED.
+#
+# Paramcheck guard of specs/carpetx-thorn-integration.md [MCNX-CTX-06]. This
+# run is the control twin of subcycling_yes.par: it is expected to pass
+# CCTK_PARAMCHECK and run to completion. It is driven by
+# agent_scripts/gate_paramcheck.sh.
+#
+# This file and subcycling_yes.par must stay identical except for the single
+# CarpetX::use_subcycling line at the bottom.
+
+ActiveThorns = "CarpetX MCNuX"
+
+Cactus::cctk_itlast = 0
+
+# CarpetX's own CCTK_PARAMCHECK routine rejects any other presync mode, and
+# rejects restriction-during-sync whenever subcycling is on; both are set so
+# that the driver's checks pass and the run reaches MCNuX's guard.
+Cactus::presync_mode = "mixed-error"
+CarpetX::restrict_during_sync = no
+
+# Smallest useful grid: the guard fires before evolution, and this run
+# must stay cheap.
+CarpetX::ncells_x = 8
+CarpetX::ncells_y = 8
+CarpetX::ncells_z = 8
+
+CarpetX::use_subcycling = no

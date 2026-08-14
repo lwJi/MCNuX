@@ -1,0 +1,17 @@
+# Test configuration for thorn MCNuX
+#
+# specs/verification-suite-design.md [MCNX-VER-01]: every MCNuX verification
+# benchmark runs single-rank — that is the exact-reproducibility mode of
+# specs/rng-and-statistical-acceptance.md, and it is what makes the golden
+# TSV/norm data bit-reproducible.
+#
+# No per-test TEST block: every benchmark here is diffed at the flesh
+# harness defaults ABSTOL = RELTOL = 1e-12. A loosened tolerance is admissible
+# only as a TEST block carrying an in-file justification (the
+# CarpetX/TestODESolvers/test/test.ccl precedent) — do not add one without it.
+#
+# `.tsv` is recognized as golden data through CarpetX's global
+# `EXTENSIONS tsv` declaration (CarpetX/CarpetX/test/test.ccl), which applies
+# to every thorn in the pinned ThornList, so it is not repeated here.
+
+NPROCS 1
