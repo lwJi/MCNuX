@@ -13,10 +13,10 @@ Greenfield. The spec corpus (`specs/README.md` + 12 coded specs) is complete, se
 
 ## Tier 1 — Foundations (pure functions, guards, first test home)
 
-- [ ] T1: Constants/units/species header — constexpr five defining constants, nine derived geometrized conversion factors, MeV↔Kelvin `1.160451812e10`, species enum `{νe=0,ν̄e=1,νx=2}` with degeneracies `(1,1,4)` and lepton numbers `(+1,-1,0)`; no runtime unit parameters ([MCNX-CNV-02..06])
+- [x] T1: Constants/units/species header — constexpr five defining constants, nine derived geometrized conversion factors, MeV↔Kelvin `1.160451812e10`, species enum `{νe=0,ν̄e=1,νx=2}` with degeneracies `(1,1,4)` and lepton numbers `(+1,-1,0)`; no runtime unit parameters ([MCNX-CNV-02..06])
   - spec: specs/conventions-and-units.md
   - tests: compile-time/selftest recomputation of each pinned 10-digit factor from defining constants to machine tier (~1e-14 rel); round-trip conversion identities; species-table exact equality; species axis later cross-checked vs `WeakLibInterp/specs/fixtures/wl-Op-SFHo-15-25-50-E40-EmAb.h5ls` (folds into T9). Fold all into T5's `unit-selftest` when it lands.
-  - notes: prerequisite of T9–T22; sets header-location convention; spec anchor `specs/conventions-and-units.md:66-125`.
+  - notes: DONE — `MCNuX/src/mcnux_units.hxx` (header-only, `namespace MCNuX`, no cctk/AMReX includes), 47 static_asserts in three groups, included from `stub.cxx` so every build re-verifies. Header convention now fixed: flat `MCNuX/src/mcnux_*.hxx`, `namespace MCNuX`. Tolerance tiers live in `MCNuX::detail`: `rtol_pinned = 1e-9` (vs truncated 10-digit spec literals — `1e-14` vs pinned values is arithmetically impossible, deviations up to 2.1e-10; [MCNX-CNV-04] allows extra digits), `rtol_machine = 1e-14` (full-precision identities/round-trips). T5 must reuse these, not re-derive. Consistency sweep clean: each pinned literal appears exactly once (in its static_assert anchor). Naming is directional (`*_code_to_cgs`; opacity reverse direction documented in-header).
 - [ ] T2: Philox4x32-10 RNG primitive — pure device-callable `u(S,q,e,k)`: round function + constants ([MCNX-RNG-01]), counter/key packing ([MCNX-RNG-03]), `[0,1)` double via `(u64 >> 11) * 2^-53` ([MCNX-RNG-04]); header wired into make.code.defn
   - spec: specs/rng-and-statistical-acceptance.md
   - tests: three KAT vectors bit-for-bit exact ([MCNX-RNG-02], spec `:61-69`); purity/independence evidence — repeated calls, permuted batch order, host-vs-device bitwise agreement ([MCNX-RNG-06]); fold into `unit-selftest` (T5). [MCNX-RNG-05] no-stateful-RNG is an inspection gate on all later physics tasks.
@@ -168,3 +168,8 @@ Greenfield. The spec corpus (`specs/README.md` + 12 coded specs) is complete, se
 - Explicitly spec-deferred (NOT deliverables): packet-count control beyond `E_p` (`specs/packet-representation-and-sampling.md:245-248`); β-dependent Eq. 50 stability bound (`specs/trapped-regime-treatment.md:450-455`); NES/Pair/Brem νx thermal-emission assembly (`specs/opacity-eos-evaluation.md:340-349`); HYD-06 simultaneous-use double-counting (`specs/hydro-coupling-source-terms.md:330-336`).
 
 ## Discovered since last plan
+
+- [ ] Spec clarification: `specs/conventions-and-units.md:129` demands `1e-14` relative agreement against the *pinned 10-digit* factor values, which is arithmetically impossible (truncated literals deviate from full-precision recomputation by up to 2.1e-10; worst: emissivity 2.06e-10). T1 resolved it per [MCNX-CNV-04] (extra digits allowed): `rtol_pinned=1e-9` vs pinned literals, `rtol_machine=1e-14` for full-precision identities — rationale commented in `MCNuX/src/mcnux_units.hxx`. Spec-edit task: amend `:129` to state the two-tier tolerance so T5's `unit-selftest` doesn't inherit an unsatisfiable criterion. Scope includes authoring the amendment via spec-author (no new spec file; edit in place).
+  - spec: specs/conventions-and-units.md
+  - tests: `bash specs/tools/validate_specs.sh` exit 0 after the edit (exact).
+  - notes: discovered 2026-08-14 during T1; low urgency — code already carries the rationale.
