@@ -194,51 +194,84 @@ constexpr int lepton_number(Species s) noexcept {
 }
 
 // ---------------------------------------------------------------------------
+// Pinned table anchors  [MCNX-CNV-04]
+// ---------------------------------------------------------------------------
+// The spec's own 10-significant-digit table values
+// (conventions-and-units.md:82-90,99,103). Each such literal appears in the
+// repository exactly once — here — so that the single-constant-set sweep of
+// [MCNX-CNV-03] stays mechanical. These are *anchors*, never inputs: nothing
+// in MCNuX computes with them. They are consumed by the static_asserts below
+// (build-time verification) and by the `unit-selftest` battery of
+// specs/verification-suite-design.md [MCNX-VER-06] (the same comparison, run
+// again at runtime and archived as golden data). Names mirror the factor they
+// anchor.
+
+namespace pinned {
+
+inline constexpr double length_code_to_cgs = 1.476625038e5;
+inline constexpr double time_code_to_cgs = 4.925490948e-6;
+inline constexpr double mass_code_to_cgs = 1.988409871e33;
+inline constexpr double energy_code_to_cgs = 1.787093669e54;
+inline constexpr double energy_code_to_MeV = 1.115416135e60;
+inline constexpr double mass_density_code_to_cgs = 6.175828479e17;
+inline constexpr double energy_density_code_to_cgs = 5.550557829e38;
+inline constexpr double opacity_code_to_cgs = 6.772199944e-6;
+inline constexpr double rate_code_to_cgs = 2.030254467e5;
+inline constexpr double emissivity_code_to_cgs = 1.126904483e44;
+inline constexpr double mev_to_kelvin = 1.160451812e10;
+inline constexpr double k_B_MeV_per_K = 8.617333262e-11;
+
+} // namespace pinned
+
+// ---------------------------------------------------------------------------
 // Compile-time verification (conventions-and-units.md:129-131)
 // ---------------------------------------------------------------------------
 // These static_asserts *are* the T1 test: any translation unit that includes
 // this header re-verifies the whole constant set at build time.
 
 // (a) Factor recomputation against the pinned 10-significant-digit table
-//     values. Each pinned literal of conventions-and-units.md:82-90,99,103
-//     appears in the repository exactly once — here. See detail::rtol_pinned
-//     for why the tier is 1e-9 rather than 1e-14.
+//     values above. See detail::rtol_pinned for why the tier is 1e-9 rather
+//     than 1e-14.
 
-static_assert(detail::approx_eq(length_code_to_cgs, 1.476625038e5,
+static_assert(detail::approx_eq(length_code_to_cgs, pinned::length_code_to_cgs,
                                 detail::rtol_pinned),
               "length code->cgs factor disagrees with the pinned value");
-static_assert(detail::approx_eq(time_code_to_cgs, 4.925490948e-6,
+static_assert(detail::approx_eq(time_code_to_cgs, pinned::time_code_to_cgs,
                                 detail::rtol_pinned),
               "time code->cgs factor disagrees with the pinned value");
-static_assert(detail::approx_eq(mass_code_to_cgs, 1.988409871e33,
+static_assert(detail::approx_eq(mass_code_to_cgs, pinned::mass_code_to_cgs,
                                 detail::rtol_pinned),
               "mass code->cgs factor disagrees with the pinned value");
-static_assert(detail::approx_eq(energy_code_to_cgs, 1.787093669e54,
+static_assert(detail::approx_eq(energy_code_to_cgs, pinned::energy_code_to_cgs,
                                 detail::rtol_pinned),
               "energy code->cgs factor disagrees with the pinned value");
-static_assert(detail::approx_eq(energy_code_to_MeV, 1.115416135e60,
+static_assert(detail::approx_eq(energy_code_to_MeV, pinned::energy_code_to_MeV,
                                 detail::rtol_pinned),
               "energy code->MeV factor disagrees with the pinned value");
-static_assert(detail::approx_eq(mass_density_code_to_cgs, 6.175828479e17,
+static_assert(detail::approx_eq(mass_density_code_to_cgs,
+                                pinned::mass_density_code_to_cgs,
                                 detail::rtol_pinned),
               "mass density code->cgs factor disagrees with the pinned value");
-static_assert(detail::approx_eq(energy_density_code_to_cgs, 5.550557829e38,
+static_assert(detail::approx_eq(energy_density_code_to_cgs,
+                                pinned::energy_density_code_to_cgs,
                                 detail::rtol_pinned),
               "energy density code->cgs factor disagrees with the pinned "
               "value");
-static_assert(detail::approx_eq(opacity_code_to_cgs, 6.772199944e-6,
+static_assert(detail::approx_eq(opacity_code_to_cgs,
+                                pinned::opacity_code_to_cgs,
                                 detail::rtol_pinned),
               "opacity code->cgs factor disagrees with the pinned value");
-static_assert(detail::approx_eq(rate_code_to_cgs, 2.030254467e5,
+static_assert(detail::approx_eq(rate_code_to_cgs, pinned::rate_code_to_cgs,
                                 detail::rtol_pinned),
               "rate code->cgs factor disagrees with the pinned value");
-static_assert(detail::approx_eq(emissivity_code_to_cgs, 1.126904483e44,
+static_assert(detail::approx_eq(emissivity_code_to_cgs,
+                                pinned::emissivity_code_to_cgs,
                                 detail::rtol_pinned),
               "emissivity code->cgs factor disagrees with the pinned value");
-static_assert(detail::approx_eq(mev_to_kelvin, 1.160451812e10,
+static_assert(detail::approx_eq(mev_to_kelvin, pinned::mev_to_kelvin,
                                 detail::rtol_pinned),
               "MeV->Kelvin factor disagrees with the pinned value");
-static_assert(detail::approx_eq(k_B_MeV_per_K, 8.617333262e-11,
+static_assert(detail::approx_eq(k_B_MeV_per_K, pinned::k_B_MeV_per_K,
                                 detail::rtol_pinned),
               "k_B in MeV/K disagrees with the pinned value");
 
@@ -317,6 +350,40 @@ static_assert(lepton_number(Species::NuEBar) == -1, "l(nu_e_bar) = -1");
 static_assert(lepton_number(Species::NuX) == 0, "l(nu_x) = 0");
 static_assert(species_lepton_number[0] + species_lepton_number[1] == 0,
               "nu_e and nu_e_bar carry opposite lepton number");
+
+namespace detail {
+
+// The same species table as one predicate, so that the runtime `unit-selftest`
+// battery of specs/verification-suite-design.md can report it as a single
+// exact row without restating any of the values above.
+constexpr bool species_table_holds() noexcept {
+  if (NUM_SPECIES != 3)
+    return false;
+  if (species_index(Species::NuE) != 0 || species_index(Species::NuEBar) != 1 ||
+      species_index(Species::NuX) != 2)
+    return false;
+  if (degeneracy(Species::NuE) != 1 || degeneracy(Species::NuEBar) != 1 ||
+      degeneracy(Species::NuX) != 4)
+    return false;
+  if (lepton_number(Species::NuE) != +1 ||
+      lepton_number(Species::NuEBar) != -1 || lepton_number(Species::NuX) != 0)
+    return false;
+  if (lepton_number(Species::NuE) + lepton_number(Species::NuEBar) != 0)
+    return false;
+  for (int i = 0; i < NUM_SPECIES; ++i) {
+    if (species_degeneracy[i] != degeneracy(static_cast<Species>(i)))
+      return false;
+    if (species_lepton_number[i] != lepton_number(static_cast<Species>(i)))
+      return false;
+  }
+  return true;
+}
+
+} // namespace detail
+
+static_assert(detail::species_table_holds(),
+              "the species enumeration, degeneracies, and lepton numbers must "
+              "agree with conventions-and-units.md:110-114,125");
 
 } // namespace MCNuX
 

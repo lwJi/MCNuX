@@ -12,6 +12,27 @@ SCHEDULE MCNuX_ParamCheck AT CCTK_PARAMCHECK
   OPTIONS: global
 } "Abort when CarpetX subcycling is enabled (MCNuX transport is single-rate)"
 
+# Unit self-test battery of specs/verification-suite-design.md [MCNX-VER-06]
+# (the `unit-selftest` benchmark). Storage and scheduling are both guarded by
+# the parameter, so a production run carries neither the array nor the
+# routine; when the parameter is off the group has no storage and the TSV
+# writer skips it. Global mode: the battery is a rank-independent computation
+# over MCNuX's own compile-time code and must run exactly once. The WRITES:
+# clause is complete per [MCNX-CTX-04] — the routine touches no other grid
+# variable.
+
+if (run_selftests)
+{
+  STORAGE: mcnux_selftest
+
+  SCHEDULE MCNuX_SelfTest AT initial
+  {
+    LANG: C
+    OPTIONS: global
+    WRITES: MCNuX::mcnux_selftest(everywhere)
+  } "Run the MCNuX unit self-test battery"
+}
+
 STORAGE: mcnux_transport_diag
 
 # Transport-cadence contract of specs/carpetx-thorn-integration.md

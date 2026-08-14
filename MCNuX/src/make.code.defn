@@ -1,5 +1,5 @@
 # Main make.code.defn file for thorn MCNuX
 
-SRCS = mcnux_cadence.cxx mcnux_paramcheck.cxx stub.cxx
+SRCS = mcnux_cadence.cxx mcnux_paramcheck.cxx mcnux_selftest.cxx stub.cxx
 
 SUBDIRS =

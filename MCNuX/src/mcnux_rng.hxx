@@ -224,25 +224,45 @@ constexpr bool kat_matches(const PhiloxBlock &got, std::uint32_t x0,
   return got.x0 == x0 && got.x1 == x1 && got.x2 == x2 && got.x3 == x3;
 }
 
+// The three fixtures as data, so that the build-time asserts below and the
+// runtime `unit-selftest` battery of specs/verification-suite-design.md
+// [MCNX-VER-06] exercise one and the same table (each KAT word appears in the
+// repository exactly once — here).
+struct KatVector {
+  std::uint32_t c0, c1, c2, c3; // counter, little-endian word order
+  std::uint32_t k0, k1;         // key, little-endian word order
+  std::uint32_t x0, x1, x2, x3; // expected output block
+};
+
+inline constexpr int num_kat_vectors = 3;
+
+constexpr KatVector kat_vector(int i) noexcept {
+  const KatVector vs[num_kat_vectors] = {
+      // KAT 1: zero counter, zero key.
+      {0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
+       0x00000000u, 0x6627e8d5u, 0xe169c58du, 0xbc57ac4cu, 0x9b00dbd8u},
+      // KAT 2: all-ones counter, all-ones key.
+      {0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu,
+       0xffffffffu, 0x408f276du, 0x41c83b0eu, 0xa20bc7c6u, 0x6d5451fdu},
+      // KAT 3: pi-digits counter and key.
+      {0x243f6a88u, 0x85a308d3u, 0x13198a2eu, 0x03707344u, 0xa4093822u,
+       0x299f31d0u, 0xd16cfe09u, 0x94fdccebu, 0x5001e420u, 0x24126ea1u}};
+  return vs[i];
+}
+
+constexpr bool kat_holds(int i) noexcept {
+  const KatVector v = kat_vector(i);
+  return kat_matches(philox4x32_10(v.c0, v.c1, v.c2, v.c3, v.k0, v.k1), v.x0,
+                     v.x1, v.x2, v.x3);
+}
+
 } // namespace detail
 
-static_assert(detail::kat_matches(philox4x32_10(0x00000000u, 0x00000000u,
-                                                0x00000000u, 0x00000000u,
-                                                0x00000000u, 0x00000000u),
-                                  0x6627e8d5u, 0xe169c58du, 0xbc57ac4cu,
-                                  0x9b00dbd8u),
+static_assert(detail::kat_holds(0),
               "Philox4x32-10 KAT 1 (zero counter, zero key) failed");
-static_assert(detail::kat_matches(philox4x32_10(0xffffffffu, 0xffffffffu,
-                                                0xffffffffu, 0xffffffffu,
-                                                0xffffffffu, 0xffffffffu),
-                                  0x408f276du, 0x41c83b0eu, 0xa20bc7c6u,
-                                  0x6d5451fdu),
+static_assert(detail::kat_holds(1),
               "Philox4x32-10 KAT 2 (all-ones counter, all-ones key) failed");
-static_assert(detail::kat_matches(philox4x32_10(0x243f6a88u, 0x85a308d3u,
-                                                0x13198a2eu, 0x03707344u,
-                                                0xa4093822u, 0x299f31d0u),
-                                  0xd16cfe09u, 0x94fdccebu, 0x5001e420u,
-                                  0x24126ea1u),
+static_assert(detail::kat_holds(2),
               "Philox4x32-10 KAT 3 (pi-digits counter and key) failed");
 
 // A wrong number of rounds, or a key bumped after the last round instead of
@@ -261,12 +281,43 @@ static_assert(detail::philox_M0 == 0xD2511F53u &&
 //     the construction is error-free by design, so any tolerance here would
 //     hide a defect.
 
-static_assert(uniform_from_u64(0u) == 0.0, "u64 = 0 must give exactly 0.0");
-static_assert(uniform_from_u64((1ull << 11) - 1u) == 0.0,
+namespace detail {
+
+// The four closed forms the spec names explicitly
+// (rng-and-statistical-acceptance.md:116, restated by
+// specs/verification-suite-design.md's [MCNX-RNG-04] coverage row) as data, so
+// that the build-time asserts below and the runtime `unit-selftest` battery
+// exercise one and the same table.
+struct UniformClosedForm {
+  std::uint64_t u64; // input word
+  double r;          // the exactly required variate
+};
+
+inline constexpr int num_uniform_closed_forms = 4;
+
+constexpr UniformClosedForm uniform_closed_form(int i) noexcept {
+  const UniformClosedForm fs[num_uniform_closed_forms] = {
+      {0ull, 0.0},                  // u64 = 0
+      {(1ull << 11) - 1ull, 0.0},   // u64 = 2^11 - 1 (still truncates to 0)
+      {1ull << 11, 0x1p-53},        // u64 = 2^11
+      {~0ull, 1.0 - 0x1p-53}};      // u64 = 2^64 - 1
+  return fs[i];
+}
+
+constexpr bool uniform_closed_form_holds(int i) noexcept {
+  const UniformClosedForm f = uniform_closed_form(i);
+  return uniform_from_u64(f.u64) == f.r;
+}
+
+} // namespace detail
+
+static_assert(detail::uniform_closed_form_holds(0),
+              "u64 = 0 must give exactly 0.0");
+static_assert(detail::uniform_closed_form_holds(1),
               "u64 = 2^11 - 1 must still give exactly 0.0");
-static_assert(uniform_from_u64(1ull << 11) == 0x1p-53,
+static_assert(detail::uniform_closed_form_holds(2),
               "u64 = 2^11 must give exactly 2^-53");
-static_assert(uniform_from_u64(~0ull) == 1.0 - 0x1p-53,
+static_assert(detail::uniform_closed_form_holds(3),
               "u64 = 2^64 - 1 must give the largest double below 1.0");
 static_assert(uniform_from_u64(~0ull) < 1.0,
               "the maximum variate must be strictly below 1.0");
