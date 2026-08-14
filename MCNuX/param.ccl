@@ -1,1 +1,13 @@
 # Parameter definitions for thorn MCNuX
+
+RESTRICTED:
+
+# Single-rate pin of specs/carpetx-thorn-integration.md [MCNX-CTX-06]: MCNuX
+# reads the driver's subcycling switch so that MCNuX_ParamCheck can abort a
+# run configured with CarpetX::use_subcycling = yes. The CarpetX driver thorn
+# IMPLEMENTS: Driver, so the sharing block targets the capability name Driver
+# (the live idiom of CarpetX/ODESolvers/param.ccl).
+
+SHARES: Driver
+
+USES BOOLEAN use_subcycling

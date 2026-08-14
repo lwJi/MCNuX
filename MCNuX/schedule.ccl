@@ -1,1 +1,13 @@
 # Schedule definitions for thorn MCNuX
+
+# Paramcheck guard of specs/carpetx-thorn-integration.md [MCNX-CTX-06]. The
+# routine is scheduled unconditionally and branches on the parameter inside
+# its body, so that the abort is reached in exactly the configuration the
+# spec forbids. Global mode: the routine touches no grid data (hence no
+# READS:/WRITES: clauses) and must run exactly once.
+
+SCHEDULE MCNuX_ParamCheck AT CCTK_PARAMCHECK
+{
+  LANG: C
+  OPTIONS: global
+} "Abort when CarpetX subcycling is enabled (MCNuX transport is single-rate)"
