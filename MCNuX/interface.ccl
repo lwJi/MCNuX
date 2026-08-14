@@ -1,3 +1,18 @@
 # Interface definition for thorn MCNuX
 
 IMPLEMENTS: MCNuX
+
+# Transport-cadence diagnostics of specs/carpetx-thorn-integration.md
+# [MCNX-CTX-05]. The counter is an MCNuX-owned grid scalar (no INHERITS is
+# needed: MCNuX both reads and writes its own variable), so that the routines
+# of the transport-step group carry real READS:/WRITES: clauses and the
+# driver's validity machinery enforces [MCNX-CTX-04] at runtime. The counter
+# is the "transport-step counter" the cadence benchmark of
+# specs/verification-suite-design.md later consumes as a per-iteration norm.
+# It is checkpointed (the default): the count is part of the transport state,
+# so a recovered run must continue the same sequence.
+
+CCTK_INT mcnux_transport_diag TYPE=SCALAR
+{
+  transport_step_count
+} "MCNuX transport-cadence diagnostics (number of completed transport steps)"
