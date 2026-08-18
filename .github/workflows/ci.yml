@@ -131,3 +131,55 @@ jobs:
 
       - name: Paramcheck gate (MCNX-CTX-06)
         run: /bin/bash MCNuX/agent_scripts/gate_paramcheck.sh
+
+  # Compile-only GPU checks (the CarpetX/WeakLibInterp model): CarpetX's GPU
+  # option lists make the device compiler THE compiler (nvcc -x cu / amdclang++
+  # -x hip), so every translation unit in the ThornList is compiled as device
+  # code — catching missing AMREX_GPU_HOST_DEVICE qualifiers and host-only
+  # calls in device code. No harness and no gate: runners have no GPU; the
+  # cpu-real64 job stays the correctness-bearing gate. This is the GPU-backend
+  # build obligation of [MCNX-BLD-03].
+  build-gpu:
+    name: Build (${{ matrix.accelerator }} compile check)
+    strategy:
+      fail-fast: false
+      matrix:
+        accelerator: [cuda, rocm]
+    runs-on: ubuntu-latest
+    container: lwji/carpetx:${{ matrix.accelerator }}-real64
+    timeout-minutes: 180
+    steps:
+      - name: Checkout MCNuX
+        uses: actions/checkout@v4
+        with:
+          path: MCNuX
+
+      - name: Checkout pinned CarpetX
+        uses: actions/checkout@v4
+        with:
+          repository: lwJi/CarpetX
+          ref: ${{ env.CARPETX_REF }}
+          path: CarpetX
+
+      - name: Checkout pinned WeakLibInterp
+        uses: actions/checkout@v4
+        with:
+          repository: lwJi/WeakLibInterp
+          ref: ${{ env.WLI_REF }}
+          path: WeakLibInterp
+
+      - name: Set container environment
+        run: echo "CACTUSX=$GITHUB_WORKSPACE/Cactus" >> "$GITHUB_ENV"
+
+      - name: Assemble Cactus tree
+        run: /bin/bash MCNuX/agent_scripts/ci/download.sh
+
+      # Same build script as the cpu job; only the option list differs
+      # (actions-cuda-real64.cfg targets sm_90, actions-rocm-real64.cfg
+      # targets gfx90a — CarpetX's pinned choices for these images).
+      - name: Build the mcnux configuration (${{ matrix.accelerator }})
+        # $GITHUB_WORKSPACE is evaluated inside the container (the ${{ }}
+        # context would give the runner-host path)
+        run: >
+          MCNX_CI_CFG="$GITHUB_WORKSPACE/CarpetX/scripts/actions-${{ matrix.accelerator }}-real64.cfg"
+          /bin/bash MCNuX/agent_scripts/ci/build.sh
