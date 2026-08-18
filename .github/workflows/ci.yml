@@ -17,7 +17,7 @@ env:
   # citation roots for the spec validator only (the build job's AMReX is the
   # one baked into the lwji/carpetx image).
   CARPETX_REF: f17ee0f482381faf92522072a758d4b25c4ca4cd # lwJi/CarpetX (dev)
-  WLI_REF: c2fa6ebd40d3ca95a7ac4098e0327a904b28d91e # lwJi/WeakLibInterp (cactus-hip-ccache-wrapper, PR #14 — re-pin to main once merged)
+  WLI_REF: 3f908336628fc9754a8f12130ebf57ff8caa8244 # lwJi/WeakLibInterp (main)
   AMREX_REF: 8addf4d92318ea3adf7f51cdb37fe4b8c952f05e # AMReX-Codes/amrex (development)
   WARPX_REF: a4ba2b0e22650d60a645545587e9c9f4ddd82258 # BLAST-WarpX/warpx (development)
 
