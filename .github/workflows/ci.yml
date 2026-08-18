@@ -107,6 +107,19 @@ jobs:
           ref: ${{ env.WLI_REF }}
           path: WeakLibInterp
 
+      # Compiler cache (the WarpX/AMReX CI pattern): restore the most recent
+      # snapshot via the prefix restore-key, save a fresh one under this SHA.
+      # Correctness never depends on the key — ccache hashes preprocessed
+      # source + compiler + flags itself, so a CARPETX_REF/WLI_REF bump or a
+      # source edit invalidates exactly the affected translation units.
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-cpu-real64-${{ github.sha }}
+          restore-keys: |
+            ccache-cpu-real64-
+
       # $GITHUB_WORKSPACE is evaluated inside the container (the ${{ }}
       # context would give the runner-host path); agent_scripts/test.sh and
       # gate_paramcheck.sh key everything off CACTUSX, exactly as in the
@@ -119,12 +132,30 @@ jobs:
           echo "OMPI_ALLOW_RUN_AS_ROOT=1" >> "$GITHUB_ENV"
           echo "OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
+          echo "CCACHE_MAXSIZE=1.5G" >> "$GITHUB_ENV"
+          echo "CCACHE_COMPRESS=1" >> "$GITHUB_ENV"
+
+      # The lwji/carpetx images ship without ccache; the containers run as
+      # root, so a plain apt install works.
+      - name: Install ccache
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ccache
+          ccache -z
 
       - name: Assemble Cactus tree
         run: /bin/bash MCNuX/agent_scripts/ci/download.sh
 
       - name: Build the mcnux configuration
+        env:
+          # Quoted: bare `yes` is YAML-boolean true, which would reach the
+          # script as "true" and silently disable the flag.
+          MCNX_CI_CCACHE: "yes"
         run: /bin/bash MCNuX/agent_scripts/ci/build.sh
+
+      - name: Compiler cache statistics
+        run: ccache -s
 
       - name: Run the regression harness
         run: /bin/bash MCNuX/agent_scripts/test.sh
@@ -168,8 +199,31 @@ jobs:
           ref: ${{ env.WLI_REF }}
           path: WeakLibInterp
 
+      # Per-accelerator compiler cache (see the cpu job's cache step for the
+      # key/correctness model). ccache has handled nvcc since 3.4; an
+      # invocation it cannot cache falls through to the real compiler — a
+      # miss, never a wrong object. The `ccache -s` step shows what each
+      # cell actually achieves.
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ matrix.accelerator }}-real64-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ matrix.accelerator }}-real64-
+
       - name: Set container environment
-        run: echo "CACTUSX=$GITHUB_WORKSPACE/Cactus" >> "$GITHUB_ENV"
+        run: |
+          echo "CACTUSX=$GITHUB_WORKSPACE/Cactus" >> "$GITHUB_ENV"
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
+          echo "CCACHE_MAXSIZE=1.5G" >> "$GITHUB_ENV"
+          echo "CCACHE_COMPRESS=1" >> "$GITHUB_ENV"
+
+      - name: Install ccache
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ccache
+          ccache -z
 
       - name: Assemble Cactus tree
         run: /bin/bash MCNuX/agent_scripts/ci/download.sh
@@ -178,8 +232,15 @@ jobs:
       # (actions-cuda-real64.cfg targets sm_90, actions-rocm-real64.cfg
       # targets gfx90a — CarpetX's pinned choices for these images).
       - name: Build the mcnux configuration (${{ matrix.accelerator }})
+        env:
+          # Quoted: bare `yes` is YAML-boolean true, which would reach the
+          # script as "true" and silently disable the flag.
+          MCNX_CI_CCACHE: "yes"
         # $GITHUB_WORKSPACE is evaluated inside the container (the ${{ }}
         # context would give the runner-host path)
         run: >
           MCNX_CI_CFG="$GITHUB_WORKSPACE/CarpetX/scripts/actions-${{ matrix.accelerator }}-real64.cfg"
           /bin/bash MCNuX/agent_scripts/ci/build.sh
+
+      - name: Compiler cache statistics
+        run: ccache -s
