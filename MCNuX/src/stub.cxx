@@ -1,3 +1,4 @@
+#include "mcnux_opacity.hxx"
 #include "mcnux_particles.hxx"
 #include "mcnux_rng.hxx"
 #include "mcnux_units.hxx"
@@ -8,9 +9,12 @@
 // specs/conventions-and-units.md [MCNX-CNV-02..06] (its static_asserts) wired
 // into every build of the thorn without a dedicated translation unit; likewise
 // mcnux_rng.hxx for specs/rng-and-statistical-acceptance.md [MCNX-RNG-01..06]
-// (Philox4x32-10 KAT vectors, the [0, 1) construction, and purity), and
+// (Philox4x32-10 KAT vectors, the [0, 1) construction, and purity),
 // mcnux_particles.hxx for the pure-SoA layout pin of
-// specs/particle-container-and-gpu.md [MCNX-GPU-01..03].
+// specs/particle-container-and-gpu.md [MCNX-GPU-01..03], and
+// mcnux_opacity.hxx for the WeakLibInterp call-boundary contract of
+// specs/opacity-eos-evaluation.md [MCNX-OPA-01/02/03/08] (type boundary,
+// species-axis grounding, Brem Alpha, AxisBounds copyability).
 
 // Precision gate of specs/build-and-integration.md [MCNX-BLD-03]: all reals
 // are IEEE-754 binary64. The AMReX legs of the gate —
