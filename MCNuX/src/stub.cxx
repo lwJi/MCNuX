@@ -1,6 +1,7 @@
 #include "mcnux_opacity.hxx"
 #include "mcnux_particles.hxx"
 #include "mcnux_rng.hxx"
+#include "mcnux_tetrad.hxx"
 #include "mcnux_units.hxx"
 
 #include <cctk.h>
@@ -14,7 +15,11 @@
 // specs/particle-container-and-gpu.md [MCNX-GPU-01..03], and
 // mcnux_opacity.hxx for the WeakLibInterp call-boundary contract of
 // specs/opacity-eos-evaluation.md [MCNX-OPA-01/02/03/08] (type boundary,
-// species-axis grounding, Brem Alpha, AxisBounds copyability).
+// species-axis grounding, Brem Alpha, AxisBounds copyability), and
+// mcnux_tetrad.hxx for the tetrad/null-closure helpers of
+// specs/geodesic-propagation.md [MCNX-GEO-02] and
+// specs/packet-representation-and-sampling.md [MCNX-PKT-04] (analytic 3x3
+// inverse, flat-static tetrad identity, flat-limit transform/closure).
 
 // Precision gate of specs/build-and-integration.md [MCNX-BLD-03]: all reals
 // are IEEE-754 binary64. The AMReX legs of the gate —
