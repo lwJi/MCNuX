@@ -35,6 +35,8 @@
 //  21..32   units.roundtrip.<name>                [MCNX-CNV-02]
 //  33       units.species_table                   [MCNX-CNV-06]
 //  34..35   precision.sizeof_{double, cctk_real}  [MCNX-BLD-03]
+//  36..37   precision.sizeof_{amrex_real,
+//                             amrex_particle_real} [MCNX-BLD-03]
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -49,6 +51,7 @@
 //               digits, so agreement cannot be asserted at the machine tier
 //               (see the rtol_pinned comment in mcnux_units.hxx).
 
+#include "mcnux_particles.hxx"
 #include "mcnux_rng.hxx"
 #include "mcnux_units.hxx"
 
@@ -211,11 +214,17 @@ void run_battery(Battery &b) {
 
   // Rows 34..35 — the binary64 precision gate of
   // specs/build-and-integration.md [MCNX-BLD-03], measured at runtime rather
-  // than only asserted in stub.cxx. The sizeof(amrex::Real) and
-  // sizeof(amrex::ParticleReal) legs join this table when MCNuX first consumes
-  // AMReX headers.
+  // than only asserted in stub.cxx.
   b.add_exact("precision.sizeof_double", double(sizeof(double)), 8.0);
   b.add_exact("precision.sizeof_cctk_real", double(sizeof(CCTK_REAL)), 8.0);
+
+  // Rows 36..37 — the AMReX legs of the same gate, per the coverage matrix of
+  // specs/verification-suite-design.md (both sizeof(amrex::Real) and
+  // sizeof(amrex::ParticleReal)). Compile-time asserted in
+  // mcnux_particles.hxx; measured here as golden rows.
+  b.add_exact("precision.sizeof_amrex_real", double(sizeof(amrex::Real)), 8.0);
+  b.add_exact("precision.sizeof_amrex_particle_real",
+              double(sizeof(amrex::ParticleReal)), 8.0);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.
