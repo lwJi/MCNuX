@@ -1,0 +1,246 @@
+name: CI
+
+# One run per commit on every branch push; merges to main are covered by the
+# push event on main itself. No pull_request trigger, so PR commits are not
+# double-run. (The WeakLibInterp CI policy.)
+on:
+  push:
+
+# Supersede in-flight runs when a branch tip moves, but never cancel main.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  # Pinned sibling-repo revisions — bump deliberately, like WeakLibInterp's
+  # AMREX_REF. CARPETX_REF/WLI_REF feed both jobs; AMREX_REF/WARPX_REF are
+  # citation roots for the spec validator only (the build job's AMReX is the
+  # one baked into the lwji/carpetx image).
+  CARPETX_REF: f17ee0f482381faf92522072a758d4b25c4ca4cd # lwJi/CarpetX (dev)
+  WLI_REF: 3f908336628fc9754a8f12130ebf57ff8caa8244 # lwJi/WeakLibInterp (main)
+  AMREX_REF: 8addf4d92318ea3adf7f51cdb37fe4b8c952f05e # AMReX-Codes/amrex (development)
+  WARPX_REF: a4ba2b0e22650d60a645545587e9c9f4ddd82258 # BLAST-WarpX/warpx (development)
+
+jobs:
+  # The corpus linter (specs/tools/validate_specs.sh): cheap, no build. The
+  # five reference roots resolve against the pinned checkouts below; the flesh
+  # root is a shallow clone of the Cactus flesh (unpinned, like CarpetX CI's
+  # GetComponents fetch — the validator only resolves file paths in it).
+  validate-specs:
+    name: Spec validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout MCNuX
+        uses: actions/checkout@v4
+        with:
+          path: MCNuX
+
+      - name: Checkout pinned AMReX
+        uses: actions/checkout@v4
+        with:
+          repository: AMReX-Codes/amrex
+          ref: ${{ env.AMREX_REF }}
+          path: amrex
+
+      - name: Checkout pinned WarpX
+        uses: actions/checkout@v4
+        with:
+          repository: BLAST-WarpX/warpx
+          ref: ${{ env.WARPX_REF }}
+          path: warpx
+
+      - name: Checkout pinned CarpetX
+        uses: actions/checkout@v4
+        with:
+          repository: lwJi/CarpetX
+          ref: ${{ env.CARPETX_REF }}
+          path: CarpetX
+
+      - name: Checkout pinned WeakLibInterp
+        uses: actions/checkout@v4
+        with:
+          repository: lwJi/WeakLibInterp
+          ref: ${{ env.WLI_REF }}
+          path: WeakLibInterp
+
+      - name: Clone Cactus flesh (the validator's flesh/ root)
+        run: git clone --depth 1 https://bitbucket.org/cactuscode/cactus.git flesh
+
+      - name: Validate specs
+        working-directory: MCNuX
+        env:
+          MCNX_AMREX_ROOT: ${{ github.workspace }}/amrex
+          MCNX_WARPX_ROOT: ${{ github.workspace }}/warpx
+          MCNX_CARPETX_ROOT: ${{ github.workspace }}/CarpetX
+          MCNX_WEAKLIB_INTERP_ROOT: ${{ github.workspace }}/WeakLibInterp
+          MCNX_FLESH_ROOT: ${{ github.workspace }}/flesh
+        run: bash specs/tools/validate_specs.sh
+
+  # The correctness-bearing gate: build the pinned test ThornList
+  # ([MCNX-BLD-04]) in CarpetX's CI image, run the Cactus regression harness
+  # (agent_scripts/test.sh, verbatim), then the non-harness paramcheck gate
+  # (agent_scripts/gate_paramcheck.sh, verbatim). Single-rank CPU real64 —
+  # the golden-data mode of [MCNX-BLD-03].
+  build-test-cpu:
+    name: Build + harness (cpu-real64)
+    runs-on: ubuntu-latest
+    container: lwji/carpetx:cpu-real64
+    timeout-minutes: 180
+    steps:
+      - name: Checkout MCNuX
+        uses: actions/checkout@v4
+        with:
+          path: MCNuX
+
+      - name: Checkout pinned CarpetX
+        uses: actions/checkout@v4
+        with:
+          repository: lwJi/CarpetX
+          ref: ${{ env.CARPETX_REF }}
+          path: CarpetX
+
+      - name: Checkout pinned WeakLibInterp
+        uses: actions/checkout@v4
+        with:
+          repository: lwJi/WeakLibInterp
+          ref: ${{ env.WLI_REF }}
+          path: WeakLibInterp
+
+      # Compiler cache (the WarpX/AMReX CI pattern): restore the most recent
+      # snapshot via the prefix restore-key, save a fresh one under this SHA.
+      # Correctness never depends on the key — ccache hashes preprocessed
+      # source + compiler + flags itself, so a CARPETX_REF/WLI_REF bump or a
+      # source edit invalidates exactly the affected translation units.
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-cpu-real64-${{ github.sha }}
+          restore-keys: |
+            ccache-cpu-real64-
+
+      # $GITHUB_WORKSPACE is evaluated inside the container (the ${{ }}
+      # context would give the runner-host path); agent_scripts/test.sh and
+      # gate_paramcheck.sh key everything off CACTUSX, exactly as in the
+      # sandbox. OpenMPI needs the two OMPI vars to run as root in the
+      # container; /usr/local/lib is where the image installs its libraries
+      # (both per CarpetX/scripts/test.sh).
+      - name: Set container environment
+        run: |
+          echo "CACTUSX=$GITHUB_WORKSPACE/Cactus" >> "$GITHUB_ENV"
+          echo "OMPI_ALLOW_RUN_AS_ROOT=1" >> "$GITHUB_ENV"
+          echo "OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
+          echo "CCACHE_MAXSIZE=1.5G" >> "$GITHUB_ENV"
+          echo "CCACHE_COMPRESS=1" >> "$GITHUB_ENV"
+
+      # The lwji/carpetx images ship without ccache; the containers run as
+      # root, so a plain apt install works.
+      - name: Install ccache
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ccache
+          ccache -z
+
+      - name: Assemble Cactus tree
+        run: /bin/bash MCNuX/agent_scripts/ci/download.sh
+
+      - name: Build the mcnux configuration
+        env:
+          # Quoted: bare `yes` is YAML-boolean true, which would reach the
+          # script as "true" and silently disable the flag.
+          MCNX_CI_CCACHE: "yes"
+        run: /bin/bash MCNuX/agent_scripts/ci/build.sh
+
+      - name: Compiler cache statistics
+        run: ccache -s
+
+      - name: Run the regression harness
+        run: /bin/bash MCNuX/agent_scripts/test.sh
+
+      - name: Paramcheck gate (MCNX-CTX-06)
+        run: /bin/bash MCNuX/agent_scripts/gate_paramcheck.sh
+
+  # Compile-only GPU checks (the CarpetX/WeakLibInterp model): CarpetX's GPU
+  # option lists make the device compiler THE compiler (nvcc -x cu / amdclang++
+  # -x hip), so every translation unit in the ThornList is compiled as device
+  # code — catching missing AMREX_GPU_HOST_DEVICE qualifiers and host-only
+  # calls in device code. No harness and no gate: runners have no GPU; the
+  # cpu-real64 job stays the correctness-bearing gate. This is the GPU-backend
+  # build obligation of [MCNX-BLD-03].
+  build-gpu:
+    name: Build (${{ matrix.accelerator }} compile check)
+    strategy:
+      fail-fast: false
+      matrix:
+        accelerator: [cuda, rocm]
+    runs-on: ubuntu-latest
+    container: lwji/carpetx:${{ matrix.accelerator }}-real64
+    timeout-minutes: 180
+    steps:
+      - name: Checkout MCNuX
+        uses: actions/checkout@v4
+        with:
+          path: MCNuX
+
+      - name: Checkout pinned CarpetX
+        uses: actions/checkout@v4
+        with:
+          repository: lwJi/CarpetX
+          ref: ${{ env.CARPETX_REF }}
+          path: CarpetX
+
+      - name: Checkout pinned WeakLibInterp
+        uses: actions/checkout@v4
+        with:
+          repository: lwJi/WeakLibInterp
+          ref: ${{ env.WLI_REF }}
+          path: WeakLibInterp
+
+      # Per-accelerator compiler cache (see the cpu job's cache step for the
+      # key/correctness model). ccache has handled nvcc since 3.4; an
+      # invocation it cannot cache falls through to the real compiler — a
+      # miss, never a wrong object. The `ccache -s` step shows what each
+      # cell actually achieves.
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ matrix.accelerator }}-real64-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ matrix.accelerator }}-real64-
+
+      - name: Set container environment
+        run: |
+          echo "CACTUSX=$GITHUB_WORKSPACE/Cactus" >> "$GITHUB_ENV"
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
+          echo "CCACHE_MAXSIZE=1.5G" >> "$GITHUB_ENV"
+          echo "CCACHE_COMPRESS=1" >> "$GITHUB_ENV"
+
+      - name: Install ccache
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ccache
+          ccache -z
+
+      - name: Assemble Cactus tree
+        run: /bin/bash MCNuX/agent_scripts/ci/download.sh
+
+      # Same build script as the cpu job; only the option list differs
+      # (actions-cuda-real64.cfg targets sm_90, actions-rocm-real64.cfg
+      # targets gfx90a — CarpetX's pinned choices for these images).
+      - name: Build the mcnux configuration (${{ matrix.accelerator }})
+        env:
+          # Quoted: bare `yes` is YAML-boolean true, which would reach the
+          # script as "true" and silently disable the flag.
+          MCNX_CI_CCACHE: "yes"
+        # $GITHUB_WORKSPACE is evaluated inside the container (the ${{ }}
+        # context would give the runner-host path)
+        run: >
+          MCNX_CI_CFG="$GITHUB_WORKSPACE/CarpetX/scripts/actions-${{ matrix.accelerator }}-real64.cfg"
+          /bin/bash MCNuX/agent_scripts/ci/build.sh
+
+      - name: Compiler cache statistics
+        run: ccache -s
