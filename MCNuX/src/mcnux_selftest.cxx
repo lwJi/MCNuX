@@ -23,8 +23,8 @@
 // meaning, or removed: later tasks append their checks at the end and
 // regenerate the golden file (and bump SIZE in interface.ccl). The full
 // battery the spec eventually requires (tetrad/null identities, Tmunu closed
-// forms, nu_x mapping, relabeling identities, sign/range/inversion fixtures,
-// sizeof(amrex::Real)) is built up this way.
+// forms, nu_x mapping, relabeling identities, sign/range/inversion fixtures)
+// is built up this way.
 //
 //   0..2    rng.philox.kat{1,2,3}                 [MCNX-RNG-01], [MCNX-RNG-02]
 //   3..6    rng.uniform.{u64_zero, u64_2p11_minus_1,
@@ -35,6 +35,8 @@
 //  21..32   units.roundtrip.<name>                [MCNX-CNV-02]
 //  33       units.species_table                   [MCNX-CNV-06]
 //  34..35   precision.sizeof_{double, cctk_real}  [MCNX-BLD-03]
+//  36..37   precision.sizeof_amrex_{real,
+//                                   particlereal} [MCNX-BLD-03]
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -51,6 +53,8 @@
 
 #include "mcnux_rng.hxx"
 #include "mcnux_units.hxx"
+
+#include <AMReX_REAL.H>
 
 #include <cctk.h>
 #include <cctk_Arguments.h>
@@ -209,13 +213,17 @@ void run_battery(Battery &b) {
   // and lepton numbers, exact. [MCNX-CNV-06].
   b.add_boolean("units.species_table", detail::species_table_holds());
 
-  // Rows 34..35 — the binary64 precision gate of
+  // Rows 34..37 — the binary64 precision gate of
   // specs/build-and-integration.md [MCNX-BLD-03], measured at runtime rather
-  // than only asserted in stub.cxx. The sizeof(amrex::Real) and
-  // sizeof(amrex::ParticleReal) legs join this table when MCNuX first consumes
-  // AMReX headers.
+  // than only asserted at compile time (rows 34..35 mirror the language-level
+  // legs in stub.cxx, rows 36..37 the AMReX legs in mcnux_packets.hxx).
+  // amrex::Real and amrex::ParticleReal are gated by independent build macros,
+  // so neither row implies the other.
   b.add_exact("precision.sizeof_double", double(sizeof(double)), 8.0);
   b.add_exact("precision.sizeof_cctk_real", double(sizeof(CCTK_REAL)), 8.0);
+  b.add_exact("precision.sizeof_amrex_real", double(sizeof(amrex::Real)), 8.0);
+  b.add_exact("precision.sizeof_amrex_particlereal",
+              double(sizeof(amrex::ParticleReal)), 8.0);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.
