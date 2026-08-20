@@ -52,6 +52,11 @@
 //                   nu_recovery}                  [MCNX-PKT-04]
 //  58..59   tetrad.flat_static.{momentum,
 //                               identity}         [MCNX-PKT-04]
+//  60..61   srcterm.emission.{lepton,energy}_sign [MCNX-HYD-02]
+//  62..63   srcterm.absorption.{lepton,
+//                               energy}_sign      [MCNX-HYD-02]
+//  64..65   srcterm.scattering.{lepton_zero,
+//                               momentum_only}    [MCNX-HYD-02]
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -69,6 +74,7 @@
 #include "mcnux_opacity.hxx"
 #include "mcnux_particles.hxx"
 #include "mcnux_rng.hxx"
+#include "mcnux_srcterms.hxx"
 #include "mcnux_tetrad.hxx"
 #include "mcnux_units.hxx"
 
@@ -584,6 +590,45 @@ void append_tetrad_rows(Battery &b) {
 }
 
 // ---------------------------------------------------------------------------
+// Rows 60..65 — the [MCNX-HYD-02] source-term ledger arithmetic of
+// specs/hydro-coupling-source-terms.md (T17). Pure-function sign fixtures
+// through the mcnux_srcterms.hxx helpers on the header's own compile-time
+// fixture set (exact binary-fraction inputs, dV dt = 0.5), so every row is
+// exact: the worked signs of the spec (nu_e emission -> S_l < 0, G^t < 0;
+// nu_e absorption reverses both; elastic scattering changes momentum
+// components only) plus the exact fixture values, judged with no tolerance.
+// ---------------------------------------------------------------------------
+
+void append_srcterm_rows(Battery &b) {
+  constexpr SourceContribution emis = detail::srcfix_emission;
+  constexpr SourceContribution absn = detail::srcfix_absorption;
+  constexpr SourceContribution scat = detail::srcfix_scattering;
+
+  // Rows 60..61 — nu_e emission: the fluid loses a lepton and energy
+  // (S_l < 0, G^t < 0), at the exact fixture values -6 and -15.
+  b.add_boolean("srcterm.emission.lepton_sign",
+                emis.Sl < 0.0 && emis.Sl == -6.0);
+  b.add_boolean("srcterm.emission.energy_sign",
+                emis.Gt < 0.0 && emis.Gt == -15.0);
+
+  // Rows 62..63 — nu_e absorption reverses both signs and is the exact
+  // negation of emission, component-wise.
+  b.add_boolean("srcterm.absorption.lepton_sign",
+                absn.Sl > 0.0 && absn.Sl == -emis.Sl);
+  b.add_boolean("srcterm.absorption.energy_sign",
+                absn.Gt > 0.0 && absn.Gt == -emis.Gt && absn.Gx == -emis.Gx &&
+                    absn.Gy == -emis.Gy && absn.Gz == -emis.Gz);
+
+  // Rows 64..65 — elastic scattering changes momentum components only:
+  // S_l and G^t are exactly zero, the momentum transfer is the exact,
+  // nonzero fixture value.
+  b.add_exact("srcterm.scattering.lepton_zero", scat.Sl, 0.0);
+  b.add_boolean("srcterm.scattering.momentum_only",
+                scat.Gt == 0.0 && scat.Gx == 5.0 && scat.Gy == -2.0 &&
+                    scat.Gz == -4.0);
+}
+
+// ---------------------------------------------------------------------------
 // The battery itself. Every check is a call into the shared headers; no
 // constant, fixture, or tolerance is restated here.
 // ---------------------------------------------------------------------------
@@ -697,6 +742,11 @@ void run_battery(Battery &b) {
   // specs/packet-representation-and-sampling.md [MCNX-PKT-04] on synthetic
   // flat-static and curved inputs.
   append_tetrad_rows(b);
+
+  // Rows 60..65 — the source-term ledger sign fixtures of
+  // specs/hydro-coupling-source-terms.md [MCNX-HYD-02] through the
+  // mcnux_srcterms.hxx helpers.
+  append_srcterm_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.

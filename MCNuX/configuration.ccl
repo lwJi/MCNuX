@@ -7,3 +7,9 @@
 
 REQUIRES CarpetX
 REQUIRES WeakLibInterp
+
+# The CarpetX loop machinery (loop_device.hxx) used by the source-term
+# routines of specs/hydro-coupling-source-terms.md; the Loop thorn is part of
+# the CarpetX arrangement and of the pinned ThornList
+# (agent_scripts/sandbox/mcnux.th), so this adds no new external dependency.
+REQUIRES Loop

@@ -1,6 +1,7 @@
 #include "mcnux_opacity.hxx"
 #include "mcnux_particles.hxx"
 #include "mcnux_rng.hxx"
+#include "mcnux_srcterms.hxx"
 #include "mcnux_tetrad.hxx"
 #include "mcnux_units.hxx"
 
@@ -19,7 +20,10 @@
 // mcnux_tetrad.hxx for the tetrad/null-closure helpers of
 // specs/geodesic-propagation.md [MCNX-GEO-02] and
 // specs/packet-representation-and-sampling.md [MCNX-PKT-04] (analytic 3x3
-// inverse, flat-static tetrad identity, flat-limit transform/closure).
+// inverse, flat-static tetrad identity, flat-limit transform/closure), and
+// mcnux_srcterms.hxx for the source-term ledger arithmetic of
+// specs/hydro-coupling-source-terms.md [MCNX-HYD-02] (sign fixtures, exact
+// fixture values, nu_x zero-lepton, no-degeneracy-in-ledger).
 
 // Precision gate of specs/build-and-integration.md [MCNX-BLD-03]: all reals
 // are IEEE-754 binary64. The AMReX legs of the gate —
