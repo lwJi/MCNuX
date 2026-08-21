@@ -15,6 +15,19 @@ BOOLEAN run_selftests "Run the MCNuX unit self-test battery at initial time" STE
 {
 } "no"
 
+# Synthetic-event deposition switch of specs/hydro-coupling-source-terms.md
+# (the zero-then-add protocol observable, [MCNX-HYD-02]/[MCNX-HYD-03]): the
+# `source-zero-add` benchmark sets MCNuX::test_synthetic_deposit = yes, which
+# schedules MCNuX_SyntheticDeposit as a contributor in MCNuX_AddToSourceTerms,
+# injecting a small deterministic, iteration-scaled event list into fixed
+# cells through the [MCNX-HYD-02] ledger arithmetic. Off by default — the
+# injection is verification scaffolding, not physics — and STEERABLE=NEVER,
+# because the contributor's scheduling is decided from it at startup.
+
+BOOLEAN test_synthetic_deposit "Deposit a synthetic, iteration-scaled event list into the source-term variables each transport step" STEERABLE=NEVER
+{
+} "no"
+
 # Single-rate pin of specs/carpetx-thorn-integration.md [MCNX-CTX-06]: MCNuX
 # reads the driver's subcycling switch so that MCNuX_ParamCheck can abort a
 # run configured with CarpetX::use_subcycling = yes. The CarpetX driver thorn

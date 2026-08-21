@@ -35,6 +35,32 @@
 //  21..32   units.roundtrip.<name>                [MCNX-CNV-02]
 //  33       units.species_table                   [MCNX-CNV-06]
 //  34..35   precision.sizeof_{double, cctk_real}  [MCNX-BLD-03]
+//  36..37   precision.sizeof_{amrex_real,
+//                             amrex_particle_real} [MCNX-BLD-03]
+//  38..46   opacity.parity.{eos_evaluate,
+//                eos_invert_dey_noguess, eos_invert_dey_guess,
+//                emab, iso_imom1, nes_pair, nes_detailed_balance,
+//                pair_crossing, brem_summed}      [MCNX-OPA-01..03]
+//  47..49   opacity.units.{log10_kelvin_once,
+//                nes_pair_kelvin_axis,
+//                nes_db_dual_temperature}         [MCNX-OPA-02]
+//  50..51   opacity.species.{emab,iso}_slots      [MCNX-OPA-08]
+//  52       opacity.bounds.endpoints              (T11 range-policy hook)
+//  53       geo.inverse_metric.identity           [MCNX-GEO-02]
+//  54       geo.null_closure                      [MCNX-GEO-02]
+//  55..57   tetrad.{orthonormality, null_norm,
+//                   nu_recovery}                  [MCNX-PKT-04]
+//  58..59   tetrad.flat_static.{momentum,
+//                               identity}         [MCNX-PKT-04]
+//  60..61   srcterm.emission.{lepton,energy}_sign [MCNX-HYD-02]
+//  62..63   srcterm.absorption.{lepton,
+//                               energy}_sign      [MCNX-HYD-02]
+//  64..65   srcterm.scattering.{lepton_zero,
+//                               momentum_only}    [MCNX-HYD-02]
+//  66..67   trp.relabel.{eta_over_kappa_a,
+//                        total_rate}              [MCNX-TRP-02]
+//  68..69   trp.relabel.monotonicity_{ka, ks}     [MCNX-TRP-03]
+//  70       trp.relabel.alpha_one_identity        [MCNX-TRP-02] (alpha = 1)
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -49,7 +75,12 @@
 //               digits, so agreement cannot be asserted at the machine tier
 //               (see the rtol_pinned comment in mcnux_units.hxx).
 
+#include "mcnux_opacity.hxx"
+#include "mcnux_particles.hxx"
 #include "mcnux_rng.hxx"
+#include "mcnux_srcterms.hxx"
+#include "mcnux_tetrad.hxx"
+#include "mcnux_trp.hxx"
 #include "mcnux_units.hxx"
 
 #include <cctk.h>
@@ -57,6 +88,7 @@
 #include <cctk_Groups.h>
 #include <cctk_Parameters.h>
 
+#include <cmath>
 #include <cstddef>
 
 namespace MCNuX {
@@ -118,6 +150,571 @@ private:
   CheckRow rows_[capacity] = {};
   int n_ = 0;
 };
+
+// ---------------------------------------------------------------------------
+// Rows 38..52 — the WeakLibInterp call-boundary wrapper layer of
+// specs/opacity-eos-evaluation.md ([MCNX-OPA-01/02/03/08]; T9).
+//
+// Kernel parity is checked on small synthetic in-memory tables built inline
+// below (monotone axes, smooth log-stored values — the pattern of
+// WeakLibInterp/test/test_parallelfor_wrappers.cpp; NO HDF5, no file I/O:
+// the battery stays table-file-free). For each family the MCNuX wrapper
+// (mcnux_opacity.hxx) and the raw WLI `_Point` kernel are called on identical
+// inputs and compared bitwise (exact tier, [MCNX-OPA-01]). The unit-boundary
+// rows pin the MeV->Kelvin/log10 conversion applied exactly once per
+// temperature argument — including the NES/Pair Kelvin axis and the
+// detailed-balance dual-temperature split ([MCNX-OPA-02],
+// specs/opacity-eos-evaluation.md:161-165,182-184). The species rows are the
+// hardcoded structural mirror of [MCNX-OPA-08] (exactly two electron-type
+// EmAb/Iso slots, nu_e = 0 / nu_e_bar = 1, no nu_x dataset; grounded on
+// WeakLibInterp/specs/fixtures/wl-Op-SFHo-15-25-50-E40-EmAb.h5ls:22-27 and
+// specs/conventions-and-units.md:131,148 — live-fixture drift detection
+// remains with specs/tools/validate_specs.sh:280-287).
+// ---------------------------------------------------------------------------
+
+// A bounded, finite, smooth log-stored synthetic table value keyed on the
+// flat column-major offset (the test_parallelfor_wrappers.cpp generator).
+double synth_tval(std::size_t k) {
+  return 0.35 + 0.4 * std::sin(0.6 * double(k) + 0.2);
+}
+
+void append_opacity_rows(Battery &b) {
+  using wli::Real;
+
+  // --- Shared EOS 3D synthetic table: raw axes (rho [g/cm^3], T [KELVIN —
+  // table native], Ye), flat column-major, rho fastest. ---
+  constexpr int nD = 4, nT = 5, nY = 3;
+  const Real Ds[nD] = {1.0e3, 5.0e5, 2.0e8, 6.0e11};
+  const Real Ts_K[nT] = {1.0e9, 3.0e9, 1.0e10, 5.0e10, 1.0e11};
+  const Real Ys[nY] = {0.05, 0.30, 0.55};
+  const Real OS_eos = 3.5;
+  Real eos_table[nD * nT * nY];
+  for (std::size_t k = 0; k < std::size_t(nD) * nT * nY; ++k)
+    eos_table[k] = synth_tval(k);
+
+  // In-range query state, MCNuX units (T in MeV; 1.7 MeV ~ 1.97e10 K).
+  const Real rho_q = 7.3e6, T_q_MeV = 1.7, Ye_q = 0.22;
+
+  // Row 38 — EOS evaluate parity: wrapper (MeV in, one MeV->K conversion)
+  // vs the raw kernel fed the independently converted Kelvin temperature.
+  {
+    const Real got = eos_evaluate(rho_q, T_q_MeV, Ye_q, Ds, nD, Ts_K, nT, Ys,
+                                  nY, OS_eos, eos_table);
+    const Real want = wli::EosInterpolateSingleVariable3DPoint(
+        rho_q, T_q_MeV * mev_to_kelvin, Ye_q, Ds, nD, Ts_K, nT, Ys, nY, OS_eos,
+        eos_table);
+    b.add_exact("opacity.parity.eos_evaluate", got, want);
+  }
+
+  // --- EOS inversion synthetic sub-table: stored value strictly increasing
+  // in the T index so a unique in-range root exists. ---
+  Real inv_table[nD * nT * nY];
+  for (int iY = 0; iY < nY; ++iY)
+    for (int iT = 0; iT < nT; ++iT)
+      for (int iD = 0; iD < nD; ++iD)
+        inv_table[iD + nD * (iT + nT * iY)] =
+            0.08 * iT + 0.01 * iD + 0.005 * iY;
+  const Real OS_inv = 2.0;
+  const Real X_q = -0.3; // between the recovered face values at Ts_K[0]/[nT-1]
+  const wli::EosInversionBounds bounds{1.0e3, 6.0e11, -1.0, 1.0,
+                                       0.05,  0.55,   true};
+
+  // Row 39 — inversion parity, DEY no-guess: identical {T, Error} up to the
+  // wrapper's single K->MeV result mapping, and a successful (Error == 0)
+  // recovery so the row exercises the real bisection path.
+  {
+    const EosInversionResultMeV got = eos_invert_dey_noguess(
+        rho_q, X_q, Ye_q, Ds, nD, Ts_K, nT, Ys, nY, OS_inv, inv_table, bounds);
+    const wli::EosInversionResult raw = wli::ComputeTemperatureWith_DEY_NoGuess(
+        rho_q, X_q, Ye_q, Ds, nD, Ts_K, nT, Ys, nY, OS_inv, inv_table, bounds);
+    b.add_boolean("opacity.parity.eos_invert_dey_noguess",
+                  got.error == 0 && raw.Error == 0 &&
+                      got.T_MeV == raw.T / mev_to_kelvin);
+  }
+
+  // Row 40 — inversion parity, DEY guess-driven: T_Guess is a TEMPERATURE
+  // ARGUMENT, so the wrapper takes it in MeV and converts once ([MCNX-OPA-02]);
+  // the raw kernel receives the independently converted Kelvin guess.
+  {
+    const Real T_guess_MeV = 2.0;
+    const EosInversionResultMeV got =
+        eos_invert_dey_guess(rho_q, X_q, Ye_q, Ds, nD, Ts_K, nT, Ys, nY,
+                             OS_inv, inv_table, T_guess_MeV, bounds);
+    const wli::EosInversionResult raw = wli::ComputeTemperatureWith_DEY_Guess(
+        rho_q, X_q, Ye_q, Ds, nD, Ts_K, nT, Ys, nY, OS_inv, inv_table,
+        T_guess_MeV * mev_to_kelvin, bounds);
+    b.add_boolean("opacity.parity.eos_invert_dey_guess",
+                  got.error == 0 && raw.Error == 0 &&
+                      got.T_MeV == raw.T / mev_to_kelvin);
+  }
+
+  // --- Shared EmAb/Iso synthetic grids: already-log10'd E [MeV], rho
+  // [g/cm^3], T [KELVIN]; Ye raw ([MCNX-OPA-03]: MCNuX owns these log10s). ---
+  constexpr int oE = 4, oD = 5, oT = 4, oY = 3, oMom = 2;
+  const Real LogEs[oE] = {-1.0, 0.5, 1.5, 2.0};
+  const Real LogDs[oD] = {6.0, 8.0, 10.0, 12.0, 14.0};
+  const Real LogTs[oT] = {9.5, 10.0, 10.7, 11.3};
+  const Real Ys2[oY] = {0.05, 0.25, 0.50};
+  const Real E_q = 10.5, rho_q2 = 3.3e11, T_q2_MeV = 2.3, Ye_q2 = 0.31;
+
+  // Row 41 — EmAb parity: wrapper logs (E, rho, T[K]) itself; the raw kernel
+  // is fed independently computed log10 coordinates.
+  {
+    Real emab_table[oE * oD * oT * oY];
+    for (std::size_t k = 0; k < std::size_t(oE) * oD * oT * oY; ++k)
+      emab_table[k] = synth_tval(k);
+    const Real OS = 1.25;
+    const Real got = emab_evaluate(E_q, rho_q2, T_q2_MeV, Ye_q2, LogEs, oE,
+                                   LogDs, oD, LogTs, oT, Ys2, oY, OS,
+                                   emab_table);
+    const Real want = wli::EmAbInterpolateSingleVariable4DPoint(
+        std::log10(E_q), std::log10(rho_q2),
+        std::log10(T_q2_MeV * mev_to_kelvin), Ye_q2, LogEs, oE, LogDs, oD,
+        LogTs, oT, Ys2, oY, OS, emab_table);
+    b.add_exact("opacity.parity.emab", got, want);
+  }
+
+  // Row 42 — Iso parity at a NONZERO moment index (iMom = 1), with the OS
+  // selected through the species-major [nOpacities, nMoments] offset lookup
+  // (iso_offset -> wli::IsoOffset; never hand-rolled).
+  {
+    Real iso_table[oE * oMom * oD * oT * oY];
+    for (std::size_t k = 0; k < std::size_t(oE) * oMom * oD * oT * oY; ++k)
+      iso_table[k] = synth_tval(k + 7);
+    const Real offsets[num_tabulated_species * oMom] = {0.5, 1.0, 1.5, 2.0};
+    const int iSpecies = iso_species_slot(Species::NuEBar), iMom = 1;
+    const Real os_got =
+        iso_offset(offsets, num_tabulated_species, oMom, iSpecies, iMom);
+    const Real os_want =
+        wli::IsoOffset(offsets, num_tabulated_species, oMom, iSpecies, iMom);
+    const Real got =
+        iso_evaluate(E_q, rho_q2, T_q2_MeV, Ye_q2, LogEs, oE, LogDs, oD, LogTs,
+                     oT, Ys2, oY, iMom, oMom, os_got, iso_table);
+    const Real want = wli::IsoInterpolateSingleVariable5DPoint(
+        std::log10(E_q), std::log10(rho_q2),
+        std::log10(T_q2_MeV * mev_to_kelvin), Ye_q2, LogEs, oE, LogDs, oD,
+        LogTs, oT, Ys2, oY, iMom, oMom, os_want, iso_table);
+    b.add_boolean("opacity.parity.iso_imom1",
+                  os_got == os_want && got == want);
+  }
+
+  // --- Shared NES/Pair synthetic table: (nEp, nE, nMom, nT, nEta), axes
+  // log10 KELVIN and log10 eta_e. T = 1.9 MeV ~ 2.2e10 K, in range. ---
+  constexpr int pEp = 3, pE = 3, pMom = 4, pT = 4, pEta = 3;
+  const Real LogTs_np[pT] = {10.0, 10.5, 11.0, 11.5};
+  const Real LogEtas[pEta] = {-1.0, 0.0, 1.0};
+  const Real OS_np = 0.75;
+  Real np_table[pEp * pE * pMom * pT * pEta];
+  for (std::size_t k = 0; k < std::size_t(pEp) * pE * pMom * pT * pEta; ++k)
+    np_table[k] = synth_tval(k + 3);
+  const Real T_np_MeV = 1.9, eta_q = 2.4;
+  const Real E_np_MeV[pEp] = {4.0, 10.0, 24.0}; // physical grid, increasing
+
+  // Row 43 — NES/Pair aligned-point parity (Kelvin axis).
+  {
+    const Real got =
+        nes_pair_evaluate(T_np_MeV, eta_q, LogTs_np, pT, LogEtas, pEta, 1, 2,
+                          pEp, pE, 2, pMom, OS_np, np_table);
+    const Real want = wli::NESPairInterpolateSingleVariable2D2DAlignedPoint(
+        std::log10(T_np_MeV * mev_to_kelvin), std::log10(eta_q), LogTs_np, pT,
+        LogEtas, pEta, 1, 2, pEp, pE, 2, pMom, OS_np, np_table);
+    b.add_exact("opacity.parity.nes_pair", got, want);
+  }
+
+  // Row 44 — NES detailed-balance fill parity: the raw kernel receives the
+  // log10-KELVIN axis coordinate AND the bare MeV Boltzmann temperature.
+  {
+    const int iEp = 2, iE = 0, kernel = 1;
+    const Real got = nes_detailed_balance_fill(T_np_MeV, eta_q, LogTs_np, pT,
+                                               LogEtas, pEta, iEp, iE, pEp, pE,
+                                               kernel, pMom, OS_np, np_table,
+                                               E_np_MeV);
+    const Real want = wli::NESDetailedBalanceFillPoint(
+        std::log10(T_np_MeV * mev_to_kelvin), std::log10(eta_q), LogTs_np, pT,
+        LogEtas, pEta, iEp, iE, pEp, pE, kernel, pMom, OS_np, np_table,
+        E_np_MeV, T_np_MeV);
+    b.add_exact("opacity.parity.nes_detailed_balance", got, want);
+  }
+
+  // Row 45 — Pair crossing-symmetry fill parity (upper triangle iEp > iE,
+  // caller-swapped kernel component; exact relabeling, no Boltzmann factor).
+  {
+    const int iEp = 2, iE = 1, kernelSwapped = 3;
+    const Real got =
+        pair_crossing_fill(T_np_MeV, eta_q, LogTs_np, pT, LogEtas, pEta, iEp,
+                           iE, pEp, pE, kernelSwapped, pMom, OS_np, np_table);
+    const Real want = wli::PairCrossingSymmetryFillPoint(
+        std::log10(T_np_MeV * mev_to_kelvin), std::log10(eta_q), LogTs_np, pT,
+        LogEtas, pEta, iEp, iE, pEp, pE, kernelSwapped, pMom, OS_np, np_table);
+    b.add_exact("opacity.parity.pair_crossing", got, want);
+  }
+
+  // Row 46 — Brem summed parity: (rho, T) plane with rho BEFORE T (nD != nT
+  // here, so a transposed wrapper cannot pass), Alpha = [1, 1, 28/3] applied
+  // to recovered values, three caller-logged effective densities.
+  {
+    constexpr int bEp = 3, bE = 3, bMom = 1, bD = 4, bT = 5;
+    const Real LogDs_b[bD] = {8.0, 10.0, 12.0, 14.0};
+    const Real LogTs_b[bT] = {9.5, 10.2, 10.8, 11.2, 11.6};
+    const Real OS_b = 0.4;
+    Real brem_table[bEp * bE * bMom * bD * bT];
+    for (std::size_t k = 0; k < std::size_t(bEp) * bE * bMom * bD * bT; ++k)
+      brem_table[k] = synth_tval(k + 11);
+    const Real rho_eff[brem_num_effective_densities] = {2.1e11, 3.4e11,
+                                                        2.7e11};
+    const Real T_b_MeV = 2.1;
+    const int iEp = 0, iE = 2, moment = 0;
+    const Real got =
+        brem_evaluate_summed(rho_eff, T_b_MeV, LogDs_b, bD, LogTs_b, bT, iEp,
+                             iE, bEp, bE, moment, bMom, OS_b, brem_table);
+    Real LogD_eff[brem_num_effective_densities];
+    for (int l = 0; l < brem_num_effective_densities; ++l)
+      LogD_eff[l] = std::log10(rho_eff[l]);
+    const Real Alpha[brem_num_effective_densities] = {1.0, 1.0, 28.0 / 3.0};
+    const Real want = wli::BremInterpolateSingleVariable2D2DAlignedSummedPoint(
+        LogD_eff, Alpha, brem_num_effective_densities,
+        std::log10(T_b_MeV * mev_to_kelvin), LogDs_b, bD, LogTs_b, bT, iEp, iE,
+        bEp, bE, moment, bMom, OS_b, brem_table);
+    b.add_exact("opacity.parity.brem_summed", got, want);
+  }
+
+  // Row 47 — unit boundary, exact: the wrapper layer's internally-used
+  // Kelvin/log10 coordinate equals log10(T[MeV] * mev_to_kelvin) computed
+  // independently — the conversion is applied exactly once, in this order.
+  b.add_exact("opacity.units.log10_kelvin_once",
+              log10_temperature_kelvin_from_mev(T_q_MeV),
+              std::log10(T_q_MeV * mev_to_kelvin));
+
+  // Row 48 — the NES/Pair temperature axis is KELVIN ([MCNX-OPA-02]'s
+  // "including NES/Pair", the documented easy-to-make error): the wrapper
+  // result equals the raw kernel at the Kelvin coordinate and DIFFERS from
+  // the raw kernel fed the mistaken log10(T[MeV]) coordinate.
+  {
+    const Real got =
+        nes_pair_evaluate(T_np_MeV, eta_q, LogTs_np, pT, LogEtas, pEta, 1, 2,
+                          pEp, pE, 2, pMom, OS_np, np_table);
+    const Real want_kelvin =
+        wli::NESPairInterpolateSingleVariable2D2DAlignedPoint(
+            std::log10(T_np_MeV * mev_to_kelvin), std::log10(eta_q), LogTs_np,
+            pT, LogEtas, pEta, 1, 2, pEp, pE, 2, pMom, OS_np, np_table);
+    const Real wrong_mev = wli::NESPairInterpolateSingleVariable2D2DAlignedPoint(
+        std::log10(T_np_MeV), std::log10(eta_q), LogTs_np, pT, LogEtas, pEta,
+        1, 2, pEp, pE, 2, pMom, OS_np, np_table);
+    b.add_boolean("opacity.units.nes_pair_kelvin_axis",
+                  got == want_kelvin && got != wrong_mev);
+  }
+
+  // Row 49 — the detailed-balance dual-temperature split: LogT is the
+  // KELVIN table coordinate while the unlogged Boltzmann temperature stays
+  // in MeV (the energy unit of E). The wrapper must match the split form and
+  // differ from the misuse that feeds the Kelvin value into the Boltzmann
+  // factor.
+  {
+    const int iEp = 2, iE = 0, kernel = 1;
+    const Real got = nes_detailed_balance_fill(T_np_MeV, eta_q, LogTs_np, pT,
+                                               LogEtas, pEta, iEp, iE, pEp, pE,
+                                               kernel, pMom, OS_np, np_table,
+                                               E_np_MeV);
+    // The symmetric lower-triangle read Phi(iE, iEp): energy indices swapped.
+    const Real lower = wli::NESPairInterpolateSingleVariable2D2DAlignedPoint(
+        std::log10(T_np_MeV * mev_to_kelvin), std::log10(eta_q), LogTs_np, pT,
+        LogEtas, pEta, iE, iEp, pEp, pE, kernel, pMom, OS_np, np_table);
+    const Real want =
+        lower * std::exp((E_np_MeV[iE] - E_np_MeV[iEp]) / T_np_MeV);
+    const Real wrong_kelvin_boltzmann =
+        lower * std::exp((E_np_MeV[iE] - E_np_MeV[iEp]) /
+                         (T_np_MeV * mev_to_kelvin));
+    b.add_boolean("opacity.units.nes_db_dual_temperature",
+                  got == want && got != wrong_kelvin_boltzmann);
+  }
+
+  // Rows 50..51 — [MCNX-OPA-08] species-axis grounding, structural constants
+  // (no file I/O; the species_table_holds pattern): exactly two electron-type
+  // slots ordered nu_e = 0, nu_e_bar = 1, and nu_x has NO EmAb/Iso dataset.
+  b.add_boolean("opacity.species.emab_slots", detail::species_axis_holds_emab());
+  b.add_boolean("opacity.species.iso_slots", detail::species_axis_holds_iso());
+
+  // Row 52 — the T11 range-policy hook surface: AxisBounds reads the axis
+  // endpoints, and the temperature variant reports them in MCNuX-internal MeV.
+  {
+    const AxisBounds bd = axis_bounds(Ds, nD);
+    const AxisBounds bt = axis_bounds_temperature_mev(Ts_K, nT);
+    b.add_boolean("opacity.bounds.endpoints",
+                  bd.lo == Ds[0] && bd.hi == Ds[nD - 1] &&
+                      bt.lo == Ts_K[0] / mev_to_kelvin &&
+                      bt.hi == Ts_K[nT - 1] / mev_to_kelvin);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rows 53..59 — tetrad construction + null-closure helpers of
+// specs/geodesic-propagation.md [MCNX-GEO-02] and
+// specs/packet-representation-and-sampling.md [MCNX-PKT-04] (T13).
+//
+// Inputs are synthetic and self-contained: a flat-static pair (Minkowski,
+// u^mu = (1,0,0,0)) probing the closed-form limit of
+// packet-representation-and-sampling.md:187-190, and a curved pair (SPD
+// gamma_ij with off-diagonal terms, alpha != 1, beta^i != 0, and a boosted
+// u^mu whose u^t is solved at runtime from g_munu u^mu u^nu = -1) probing the
+// generic identities. All rows are machine-tier booleans (error 0 or 1), so
+// the golden data is bitwise-stable across libm ulp differences. The
+// direction draw takes fixed literal uniforms — the helper deliberately
+// performs no u(S, q, e, k) call ([MCNX-PKT-05] draw-map bookkeeping belongs
+// to the consuming code, not to these helpers).
+// ---------------------------------------------------------------------------
+
+void append_tetrad_rows(Battery &b) {
+  // Absolute machine-tier closeness for O(1) quantities whose target may be
+  // exactly 0 (orthonormality off-diagonals, the null norm), where a relative
+  // comparison is undefined.
+  const auto near_abs = [](double got, double want) {
+    return detail::cabs(got - want) <= detail::rtol_machine;
+  };
+
+  // --- Synthetic curved input. ---
+  const SpatialMetric gamma{1.3, 0.12, -0.05, 1.7, 0.08, 1.1};
+  const double alp = 0.83;
+  const double betau[3] = {0.06, -0.11, 0.04};
+  const SpacetimeMetric m = spacetime_metric_from_adm(alp, betau, gamma);
+
+  // Boosted u^mu: spatial components chosen, u^t fixed by the normalization
+  // g_munu u^mu u^nu = -1 (future-pointing root of the quadratic
+  // g_tt (u^t)^2 + 2 g_ti u^i u^t + (gamma_ij u^i u^j + 1) = 0).
+  double uvec[4] = {0.0, 0.15, -0.05, 0.10};
+  {
+    const double a = m.g[0][0];
+    double bb = 0.0, cc = 1.0;
+    for (int i = 1; i < 4; ++i) {
+      bb += m.g[0][i] * uvec[i];
+      for (int j = 1; j < 4; ++j)
+        cc += m.g[i][j] * uvec[i] * uvec[j];
+    }
+    uvec[0] = (bb + std::sqrt(bb * bb - a * cc)) / (-a);
+  }
+
+  // Row 53 — [MCNX-GEO-02] analytic inverse: gamma^{ij} gamma_jk = delta^i_k
+  // (machine) and det(gamma_ij) > 0 on the SPD test metric.
+  const InverseSpatialMetric gu = spatial_metric_inverse(gamma);
+  {
+    const double lo[3][3] = {{gamma.xx, gamma.xy, gamma.xz},
+                             {gamma.xy, gamma.yy, gamma.yz},
+                             {gamma.xz, gamma.yz, gamma.zz}};
+    const double up[3][3] = {
+        {gu.xx, gu.xy, gu.xz}, {gu.xy, gu.yy, gu.yz}, {gu.xz, gu.yz, gu.zz}};
+    bool ok = gu.det > 0.0;
+    for (int i = 0; i < 3; ++i)
+      for (int k = 0; k < 3; ++k) {
+        double s = 0.0;
+        for (int j = 0; j < 3; ++j)
+          s += up[i][j] * lo[j][k];
+        ok = ok && near_abs(s, i == k ? 1.0 : 0.0);
+      }
+    b.add_boolean("geo.inverse_metric.identity", ok);
+  }
+
+  // One drawn packet on the curved background: fixed literal uniforms into
+  // the isotropic draw, then the pinned x->y->z Gram-Schmidt tetrad and the
+  // [MCNX-PKT-04] transform.
+  const double nu = 3.25;
+  const UnitVector3 nhat = fluid_frame_direction(0.35, 0.62);
+  const Tetrad tet = build_tetrad(alp, betau, gamma, uvec);
+  const FourVectorUp pup = fluid_momentum_to_coordinate(tet, nu, nhat);
+  const CoordinateMomentum pm = transform_to_coordinate_frame(tet, m, nu, nhat);
+
+  // Row 54 — [MCNX-GEO-02] null closure on the transformed momentum:
+  // p^t = sqrt(gamma^{ij} p_i p_j)/alpha recovers the tetrad's p^t (the
+  // physical nullness content) and alpha^2 (p^t)^2 = gamma^{ij} p_i p_j
+  // (geodesic-propagation.md:96-97), both machine tier.
+  {
+    const double pt = p_t_closure(pm.px, pm.py, pm.pz, gu, alp);
+    const double n2 = momentum_norm2(gu, pm.px, pm.py, pm.pz);
+    b.add_boolean("geo.null_closure",
+                  detail::approx_eq(pt, pm.pt, detail::rtol_machine) &&
+                      detail::approx_eq(alp * alp * pt * pt, n2,
+                                        detail::rtol_machine));
+  }
+
+  // Row 55 — tetrad orthonormality: g_munu e^mu_(a) e^nu_(b) = eta_ab for
+  // all 10 independent pairs, machine tier.
+  {
+    bool ok = true;
+    for (int a = 0; a < 4; ++a)
+      for (int c = a; c < 4; ++c) {
+        const double eta = a != c ? 0.0 : (a == 0 ? -1.0 : 1.0);
+        ok = ok && near_abs(metric_dot(m, tet.e[a], tet.e[c]), eta);
+      }
+    b.add_boolean("tetrad.orthonormality", ok);
+  }
+
+  // Row 56 — transformed momentum is null: g_munu p^mu p^nu = 0 normalized
+  // by (alpha p^t)^2 (packet-representation-and-sampling.md:138-140).
+  {
+    const double norm = metric_dot(m, pup.v, pup.v);
+    const double scale = (alp * pm.pt) * (alp * pm.pt);
+    b.add_boolean("tetrad.null_norm", near_abs(norm / scale, 0.0));
+  }
+
+  // Row 57 — nu recovery: -p_mu u^mu equals the drawn nu, machine tier.
+  {
+    double pu = 0.0;
+    for (int mu = 0; mu < 4; ++mu)
+      for (int nu4 = 0; nu4 < 4; ++nu4)
+        pu += m.g[mu][nu4] * pup.v[nu4] * uvec[mu];
+    b.add_boolean("tetrad.nu_recovery",
+                  detail::approx_eq(-pu, nu, detail::rtol_machine));
+  }
+
+  // --- Flat-static limit: Minkowski, u^mu = (1, 0, 0, 0). ---
+  const SpatialMetric flat{1.0, 0.0, 0.0, 1.0, 0.0, 1.0};
+  const double beta0[3] = {0.0, 0.0, 0.0};
+  const double ustat[4] = {1.0, 0.0, 0.0, 0.0};
+  const SpacetimeMetric mf = spacetime_metric_from_adm(1.0, beta0, flat);
+  const Tetrad tf = build_tetrad(1.0, beta0, flat, ustat);
+  const CoordinateMomentum pf = transform_to_coordinate_frame(tf, mf, nu, nhat);
+
+  // Row 58 — flat-static momentum: p^t = nu and p_i = nu n_hat_i, machine
+  // tier (packet-representation-and-sampling.md:187-190).
+  b.add_boolean("tetrad.flat_static.momentum",
+                detail::approx_eq(pf.pt, nu, detail::rtol_machine) &&
+                    detail::approx_eq(pf.px, nu * nhat.x,
+                                      detail::rtol_machine) &&
+                    detail::approx_eq(pf.py, nu * nhat.y,
+                                      detail::rtol_machine) &&
+                    detail::approx_eq(pf.pz, nu * nhat.z,
+                                      detail::rtol_machine));
+
+  // Row 59 — flat-static tetrad legs equal the coordinate basis, exactly
+  // (the x->y->z Gram-Schmidt touches only exact values on this input).
+  {
+    bool ok = true;
+    for (int a = 0; a < 4; ++a)
+      for (int mu = 0; mu < 4; ++mu)
+        ok = ok && tf.e[a][mu] == (a == mu ? 1.0 : 0.0);
+    b.add_boolean("tetrad.flat_static.identity", ok);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rows 60..65 — the [MCNX-HYD-02] source-term ledger arithmetic of
+// specs/hydro-coupling-source-terms.md (T17). Pure-function sign fixtures
+// through the mcnux_srcterms.hxx helpers on the header's own compile-time
+// fixture set (exact binary-fraction inputs, dV dt = 0.5), so every row is
+// exact: the worked signs of the spec (nu_e emission -> S_l < 0, G^t < 0;
+// nu_e absorption reverses both; elastic scattering changes momentum
+// components only) plus the exact fixture values, judged with no tolerance.
+// ---------------------------------------------------------------------------
+
+void append_srcterm_rows(Battery &b) {
+  constexpr SourceContribution emis = detail::srcfix_emission;
+  constexpr SourceContribution absn = detail::srcfix_absorption;
+  constexpr SourceContribution scat = detail::srcfix_scattering;
+
+  // Rows 60..61 — nu_e emission: the fluid loses a lepton and energy
+  // (S_l < 0, G^t < 0), at the exact fixture values -6 and -15.
+  b.add_boolean("srcterm.emission.lepton_sign",
+                emis.Sl < 0.0 && emis.Sl == -6.0);
+  b.add_boolean("srcterm.emission.energy_sign",
+                emis.Gt < 0.0 && emis.Gt == -15.0);
+
+  // Rows 62..63 — nu_e absorption reverses both signs and is the exact
+  // negation of emission, component-wise.
+  b.add_boolean("srcterm.absorption.lepton_sign",
+                absn.Sl > 0.0 && absn.Sl == -emis.Sl);
+  b.add_boolean("srcterm.absorption.energy_sign",
+                absn.Gt > 0.0 && absn.Gt == -emis.Gt && absn.Gx == -emis.Gx &&
+                    absn.Gy == -emis.Gy && absn.Gz == -emis.Gz);
+
+  // Rows 64..65 — elastic scattering changes momentum components only:
+  // S_l and G^t are exactly zero, the momentum transfer is the exact,
+  // nonzero fixture value.
+  b.add_exact("srcterm.scattering.lepton_zero", scat.Sl, 0.0);
+  b.add_boolean("srcterm.scattering.momentum_only",
+                scat.Gt == 0.0 && scat.Gx == 5.0 && scat.Gy == -2.0 &&
+                    scat.Gz == -4.0);
+}
+
+// ---------------------------------------------------------------------------
+// Rows 66..70 — the [MCNX-TRP-02/03] trapped-regime relabeling pure map of
+// specs/trapped-regime-treatment.md (T21a), through mcnux_trp.hxx. Synthetic
+// pinned (eta, kappa_a, kappa_s) tuples (kappa_a > 0 so the ratio invariant
+// is defined) swept over alpha in (0, 1] — no live opacity tables. The two
+// invariant rows are machine-tier booleans (detail::approx_eq at
+// detail::rtol_machine, the spec's ~1e-14 tier); the monotonicity rows are
+// the exact strict-inequality convention tripwire of [MCNX-TRP-03] (the
+// flipped 2020-letter alpha convention reverses both); the alpha = 1 row is
+// the exact bitwise identity endpoint the [MCNX-TRP-05] limit benchmark
+// later builds on. Alpha SELECTION (the xi control rule) is T21b, not here.
+// ---------------------------------------------------------------------------
+
+void append_trp_rows(Battery &b) {
+  struct Unprimed {
+    double eta, kappa_a, kappa_s;
+  };
+  // Pinned sweep states: exact binary fractions plus generic magnitudes
+  // spanning ~13 decades in the coefficients.
+  const Unprimed states[] = {
+      {1.5, 0.5, 0.25},
+      {3.7e-3, 1.2e2, 4.9e-1},
+      {6.02e5, 9.1e3, 2.2e4},
+      {1.0e-8, 3.3e-6, 7.7e-7},
+  };
+  // Pinned alpha sweep, strictly increasing within (0, 1].
+  const double alphas[] = {0.0625, 0.25, 0.5, 0.75, 0.9, 1.0};
+  constexpr int nstates = int(sizeof(states) / sizeof(states[0]));
+  constexpr int nalphas = int(sizeof(alphas) / sizeof(alphas[0]));
+
+  // Rows 66..67 — the two exact-consequence invariants of [MCNX-TRP-02],
+  // machine tier at every (state, alpha) of the sweep.
+  bool ratio_ok = true, total_ok = true;
+  for (int s = 0; s < nstates; ++s)
+    for (int a = 0; a < nalphas; ++a) {
+      const RelabeledCoefficients r =
+          relabel(states[s].eta, states[s].kappa_a, states[s].kappa_s,
+                  alphas[a]);
+      ratio_ok = ratio_ok &&
+                 detail::approx_eq(r.eta_p / r.kappa_a_p,
+                                   states[s].eta / states[s].kappa_a,
+                                   detail::rtol_machine);
+      total_ok = total_ok &&
+                 detail::approx_eq(r.kappa_a_p + r.kappa_s_p,
+                                   states[s].kappa_a + states[s].kappa_s,
+                                   detail::rtol_machine);
+    }
+  b.add_boolean("trp.relabel.eta_over_kappa_a", ratio_ok);
+  b.add_boolean("trp.relabel.total_rate", total_ok);
+
+  // Rows 68..69 — the [MCNX-TRP-03] convention tripwire, exact and strict:
+  // over every adjacent alpha_1 < alpha_2 pair of the sweep, kappa_a' is
+  // strictly increasing and kappa_s' strictly decreasing in alpha. A
+  // flipped (2020-letter) implementation reverses both.
+  bool ka_ok = true, ks_ok = true;
+  for (int s = 0; s < nstates; ++s)
+    for (int a = 0; a + 1 < nalphas; ++a) {
+      const RelabeledCoefficients lo =
+          relabel(states[s].eta, states[s].kappa_a, states[s].kappa_s,
+                  alphas[a]);
+      const RelabeledCoefficients hi =
+          relabel(states[s].eta, states[s].kappa_a, states[s].kappa_s,
+                  alphas[a + 1]);
+      ka_ok = ka_ok && lo.kappa_a_p < hi.kappa_a_p;
+      ks_ok = ks_ok && lo.kappa_s_p > hi.kappa_s_p;
+    }
+  b.add_boolean("trp.relabel.monotonicity_ka", ka_ok);
+  b.add_boolean("trp.relabel.monotonicity_ks", ks_ok);
+
+  // Row 70 — alpha = 1 identity endpoint, bitwise on every state: the
+  // relabeling is exactly the identity (the (1 - alpha) kappa_a term
+  // vanishes exactly at alpha = 1).
+  bool id_ok = true;
+  for (int s = 0; s < nstates; ++s) {
+    const RelabeledCoefficients r =
+        relabel(states[s].eta, states[s].kappa_a, states[s].kappa_s, 1.0);
+    id_ok = id_ok && r.eta_p == states[s].eta &&
+            r.kappa_a_p == states[s].kappa_a &&
+            r.kappa_s_p == states[s].kappa_s;
+  }
+  b.add_boolean("trp.relabel.alpha_one_identity", id_ok);
+}
 
 // ---------------------------------------------------------------------------
 // The battery itself. Every check is a call into the shared headers; no
@@ -211,11 +808,38 @@ void run_battery(Battery &b) {
 
   // Rows 34..35 — the binary64 precision gate of
   // specs/build-and-integration.md [MCNX-BLD-03], measured at runtime rather
-  // than only asserted in stub.cxx. The sizeof(amrex::Real) and
-  // sizeof(amrex::ParticleReal) legs join this table when MCNuX first consumes
-  // AMReX headers.
+  // than only asserted in stub.cxx.
   b.add_exact("precision.sizeof_double", double(sizeof(double)), 8.0);
   b.add_exact("precision.sizeof_cctk_real", double(sizeof(CCTK_REAL)), 8.0);
+
+  // Rows 36..37 — the AMReX legs of the same gate, per the coverage matrix of
+  // specs/verification-suite-design.md (both sizeof(amrex::Real) and
+  // sizeof(amrex::ParticleReal)). Compile-time asserted in
+  // mcnux_particles.hxx; measured here as golden rows.
+  b.add_exact("precision.sizeof_amrex_real", double(sizeof(amrex::Real)), 8.0);
+  b.add_exact("precision.sizeof_amrex_particle_real",
+              double(sizeof(amrex::ParticleReal)), 8.0);
+
+  // Rows 38..52 — the WeakLibInterp call-boundary wrapper checks of
+  // specs/opacity-eos-evaluation.md (kernel parity on synthetic tables,
+  // unit-boundary conversions, species-axis grounding, T11 bounds hooks).
+  append_opacity_rows(b);
+
+  // Rows 53..59 — the tetrad/null-closure helper checks of
+  // specs/geodesic-propagation.md [MCNX-GEO-02] and
+  // specs/packet-representation-and-sampling.md [MCNX-PKT-04] on synthetic
+  // flat-static and curved inputs.
+  append_tetrad_rows(b);
+
+  // Rows 60..65 — the source-term ledger sign fixtures of
+  // specs/hydro-coupling-source-terms.md [MCNX-HYD-02] through the
+  // mcnux_srcterms.hxx helpers.
+  append_srcterm_rows(b);
+
+  // Rows 66..70 — the trapped-regime relabeling invariants, convention
+  // tripwire, and alpha = 1 identity of specs/trapped-regime-treatment.md
+  // [MCNX-TRP-02/03] through the mcnux_trp.hxx pure map.
+  append_trp_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.

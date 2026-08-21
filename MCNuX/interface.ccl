@@ -2,6 +2,8 @@
 
 IMPLEMENTS: MCNuX
 
+USES INCLUDE HEADER: loop_device.hxx
+
 # Transport-cadence diagnostics of specs/carpetx-thorn-integration.md
 # [MCNX-CTX-05]. The counter is an MCNuX-owned grid scalar (no INHERITS is
 # needed: MCNuX both reads and writes its own variable), so that the routines
@@ -33,8 +35,32 @@ CCTK_INT mcnux_transport_diag TYPE=SCALAR
 # Not checkpointed: the battery is recomputed from nothing but code, so it is
 # not part of any evolved state.
 
-CCTK_REAL mcnux_selftest TYPE=ARRAY DIM=1 SIZE=36 DISTRIB=CONSTANT TAGS='checkpoint="no"'
+CCTK_REAL mcnux_selftest TYPE=ARRAY DIM=1 SIZE=71 DISTRIB=CONSTANT TAGS='checkpoint="no"'
 {
   selftest_error
   selftest_pass
 } "MCNuX unit self-test battery results (measured error and pass flag per check)"
+
+# MCNuX-owned source-term grid variables of
+# specs/hydro-coupling-source-terms.md [MCNX-HYD-01] — the published coupling
+# interface a GRMHD partner's READS: clauses reference ([MCNX-HYD-04]), hence
+# PUBLIC. Cell-centered (CENTERING={ccc}, matching HydroBaseX), geometrized
+# code units, per unit coordinate volume per unit coordinate time,
+# undensitized (no sqrt(gamma) folded in). Sign convention: POSITIVE = GAINED
+# BY THE FLUID ([MCNX-HYD-02]: G = -Delta P/(dV dt), S_l = -Delta L/(dV dt) —
+# what packets gain, the fluid loses). Checkpointed: the values tallied at
+# step n are read by the fluid at step n+1, so they carry state across steps
+# and a checkpoint/recovery cycle between transport and the partner's read
+# must not alter what the partner reads ([MCNX-HYD-01]).
+
+PUBLIC:
+
+CCTK_REAL rad_force TYPE=gf CENTERING={ccc} TAGS='checkpoint="yes"'
+{
+  rf_t rf_x rf_y rf_z
+} "Radiation four-force density on the fluid: G^t (index up) and G_x, G_y, G_z (index down)"
+
+CCTK_REAL lepton_source TYPE=gf CENTERING={ccc} TAGS='checkpoint="yes"'
+{
+  lep_src
+} "Net electron-lepton number source density to the fluid"

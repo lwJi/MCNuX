@@ -35,6 +35,12 @@ if (run_selftests)
 
 STORAGE: mcnux_transport_diag
 
+# Source-term grid variables of specs/hydro-coupling-source-terms.md
+# [MCNX-HYD-01]: always-on storage (single timelevel) — they are the published
+# coupling interface, not test scaffolding, so storage is NOT parameter-gated.
+
+STORAGE: rad_force lepton_source
+
 # Transport-cadence contract of specs/carpetx-thorn-integration.md
 # [MCNX-CTX-05]: transport is operator-split from the fluid/spacetime
 # evolution and advances exactly once per coarsest-level Delta t, outside the
@@ -78,3 +84,56 @@ SCHEDULE MCNuX_TransportObserver IN MCNuX_TransportStep
   READS: MCNuX::transport_step_count(everywhere)
   WRITES: MCNuX::transport_step_count(everywhere)
 } "Advance and report the MCNuX transport-step counter (cadence observable)"
+
+# Zero-then-add protocol of specs/hydro-coupling-source-terms.md
+# [MCNX-HYD-03], modeled on CarpetX/TmunuBaseX/schedule.ccl: the source-term
+# variables are zeroed at one schedule point, accumulated into by
+# contributors, and only then read. The zero point lives at the START of the
+# transport group, so the tallied values persist across the step boundary for
+# the fluid's RHS reads at step n+1 (the one-step lag of [MCNX-CTX-05]).
+#
+# The same routine is also scheduled AT initial: it provides the variables'
+# initial data (all-zero — no transport has happened), so that iteration-0
+# output and a checkpoint written before the first transport step see defined
+# values ([MCNX-HYD-01] lifetime).
+
+SCHEDULE MCNuX_ZeroSourceTerms AT initial
+{
+  LANG: C
+  WRITES: MCNuX::rad_force(everywhere)
+  WRITES: MCNuX::lepton_source(everywhere)
+} "Initialize the MCNuX source-term variables to zero"
+
+SCHEDULE MCNuX_ZeroSourceTerms IN MCNuX_TransportStep
+{
+  LANG: C
+  WRITES: MCNuX::rad_force(everywhere)
+  WRITES: MCNuX::lepton_source(everywhere)
+} "Set the MCNuX source-term variables to zero"
+
+# The named, empty-by-default extension group (the TmunuBaseX_AddToTmunu
+# analogue): every deposition routine is a contributor scheduled in here — a
+# self-accumulating READS: + WRITES: pair on the source variables, performing
+# read-modify-write += only, ordered after the zeroing by group ordering.
+
+SCHEDULE GROUP MCNuX_AddToSourceTerms IN MCNuX_TransportStep AFTER MCNuX_ZeroSourceTerms
+{
+} "Add to the MCNuX source-term variables here"
+
+# The synthetic-event contributor (verification scaffolding, parameter-gated):
+# proves the deposition/ledger path of [MCNX-HYD-02] before any real event
+# producer exists. The complete self-accumulating READS:/WRITES: pair is the
+# contributor idiom of [MCNX-HYD-03], enforced at runtime by the driver's
+# presync/poison machinery ([MCNX-CTX-04]).
+
+if (test_synthetic_deposit)
+{
+  SCHEDULE MCNuX_SyntheticDeposit IN MCNuX_AddToSourceTerms
+  {
+    LANG: C
+    READS: MCNuX::rad_force(everywhere)
+    READS: MCNuX::lepton_source(everywhere)
+    WRITES: MCNuX::rad_force(everywhere)
+    WRITES: MCNuX::lepton_source(everywhere)
+  } "Deposit a synthetic, iteration-scaled event list (ledger-path observable)"
+}
