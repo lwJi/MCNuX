@@ -60,13 +60,14 @@ namespace {
 // The cells are matched by coordinate with a quarter-cell tolerance (cell
 // centers are a full dx apart), so the match is exact-by-construction and
 // independent of index conventions.
+// The cell objects themselves are defined as function-local constexpr values
+// inside MCNuX_SyntheticDeposit (captured by value into the device lambda):
+// nvcc only lets device code use namespace-scope constexpr variables of
+// scalar type, so struct-typed fixtures at namespace scope are "undefined in
+// device code" under CUDA (HIP/clang accepts them, which hides the defect).
 struct FixtureCell {
   double x, y, z;
 };
-
-inline constexpr FixtureCell emission_cell{-0.375, 0.125, 0.125};
-inline constexpr FixtureCell absorption_cell{0.125, 0.375, 0.125};
-inline constexpr FixtureCell scattering_cell{0.125, 0.125, 0.625};
 
 } // namespace
 
@@ -91,6 +92,11 @@ extern "C" void MCNuX_SyntheticDeposit(CCTK_ARGUMENTS) {
   // Iteration scale: packets-worth N grows linearly with cctk_iteration, so
   // consecutive steps deposit different, analytically-known values.
   const double scale = static_cast<double>(cctk_iteration);
+
+  // Fixture cells (see the FixtureCell comment above for the coordinates).
+  constexpr FixtureCell emission_cell{-0.375, 0.125, 0.125};
+  constexpr FixtureCell absorption_cell{0.125, 0.375, 0.125};
+  constexpr FixtureCell scattering_cell{0.125, 0.125, 0.625};
 
   // The three sign fixtures of hydro-coupling-source-terms.md:260-262,
   // evaluated on the host through mcnux_srcterms.hxx:
