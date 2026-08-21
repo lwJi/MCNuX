@@ -3,6 +3,7 @@
 #include "mcnux_rng.hxx"
 #include "mcnux_srcterms.hxx"
 #include "mcnux_tetrad.hxx"
+#include "mcnux_trp.hxx"
 #include "mcnux_units.hxx"
 
 #include <cctk.h>
@@ -23,7 +24,11 @@
 // inverse, flat-static tetrad identity, flat-limit transform/closure), and
 // mcnux_srcterms.hxx for the source-term ledger arithmetic of
 // specs/hydro-coupling-source-terms.md [MCNX-HYD-02] (sign fixtures, exact
-// fixture values, nu_x zero-lepton, no-degeneracy-in-ledger).
+// fixture values, nu_x zero-lepton, no-degeneracy-in-ledger), and
+// mcnux_trp.hxx for the trapped-regime opacity-relabeling pure map of
+// specs/trapped-regime-treatment.md [MCNX-TRP-02/03] (the two exact
+// invariants, the 2021-convention monotonicity tripwire, the alpha = 1
+// identity endpoint).
 
 // Precision gate of specs/build-and-integration.md [MCNX-BLD-03]: all reals
 // are IEEE-754 binary64. The AMReX legs of the gate —
