@@ -27,6 +27,22 @@ Cactus::presync_mode = "mixed-error"
 # The subject of this benchmark: run the battery once, at initial time.
 MCNuX::run_selftests = yes
 
+# Analytic-opacity parameters of specs/verification-suite-design.md
+# [MCNX-VER-05] at non-default values, so the battery's
+# opacity.dispatch.param_plumbing row exercises the param.ccl KEYWORD/array
+# syntax end to end (index = species index: 0 nu_e, 1 nu_e_bar, 2 nu_x). The
+# source keyword stays at its default ("table"): the row forces the analytic
+# leg itself, and no transport consumer reads the selection in this run.
+MCNuX::kappa_a0[0] = 0.5
+MCNuX::kappa_a0[1] = 0.25
+MCNuX::kappa_a0[2] = 0.125
+MCNuX::kappa_s0[0] = 2.0
+MCNuX::kappa_s0[1] = 1.0
+MCNuX::kappa_s0[2] = 0.75
+MCNuX::eta_scale[0] = 1.0
+MCNuX::eta_scale[1] = 0.5
+MCNuX::eta_scale[2] = 1.0
+
 # The battery is a global computation over MCNuX's compile-time code; the grid
 # exists only because the driver needs one. Smallest useful box.
 CarpetX::ncells_x = 8

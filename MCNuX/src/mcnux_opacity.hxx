@@ -44,7 +44,9 @@
 //   * NO kappa/eta assembly, no Kirchhoff closure, no nu_x mapping
 //     ([MCNX-OPA-04/05], T10), and no degeneracy factor anywhere (g = 4
 //     enters exactly once at packet creation, never in per-species transport
-//     coefficients).
+//     coefficients). The analytic-mode formulas live in
+//     mcnux_opacity_analytic.hxx and the table-vs-analytic runtime dispatch
+//     in mcnux_coefficients.hxx; both sit ABOVE this wrapper layer.
 //   * NO eta_e assembly helper (the baseline never calls NES/Pair; the EOS
 //     evaluate wrapper suffices to fetch mu_e when a consumer needs eta_e).
 //

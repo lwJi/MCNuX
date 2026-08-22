@@ -89,6 +89,15 @@ inline constexpr double G_cgs = 6.67430e-8;
 // Nominal solar mass parameter [cm^3 s^-2], IAU 2015 B3, exact by convention.
 inline constexpr double GM_sun_cgs = 1.3271244e26;
 
+// Planck constant [erg s], SI-2019 exact (h = 6.62607015e-34 J s). The one
+// SI-exact EXTENSION of the five-constant set above, pinned by
+// specs/opacity-eos-evaluation.md ("Assumption: hc pin extends the constant
+// set") for the Kirchhoff normalization 4 pi E^3/(hc)^3 of the emissivity
+// ([MCNX-OPA-04] table closure and the analytic mode of
+// specs/verification-suite-design.md [MCNX-VER-05]). Not a competing
+// constant set: it enters only through hc_MeV_cm below.
+inline constexpr double h_cgs = 6.62607015e-27;
+
 // ---------------------------------------------------------------------------
 // Derived conversion factors  [MCNX-CNV-04]
 // ---------------------------------------------------------------------------
@@ -141,6 +150,13 @@ inline constexpr double rate_code_to_cgs = 1.0 / time_code_to_cgs;
 // Emissivity, M_sun c^2/(L^3 t) [erg cm^-3 s^-1].
 inline constexpr double emissivity_code_to_cgs =
     energy_density_code_to_cgs / time_code_to_cgs;
+
+// hc in microphysics units [MeV cm], derived from the SI-exact h, c, and e
+// (specs/opacity-eos-evaluation.md, "hc pin": h c / (1 MeV in erg)). The
+// Planck phase-space factor 4 pi E^3/(hc)^3 of every emissivity closure is
+// written in terms of this one value; the spec's 10-digit pin
+// hc = 1.239841984e-10 MeV cm is the anchor in namespace pinned below.
+inline constexpr double hc_MeV_cm = h_cgs * c_cgs / MeV_to_erg;
 
 // ---------------------------------------------------------------------------
 // Temperature at the WeakLibInterp boundary  [MCNX-CNV-05]
@@ -221,6 +237,10 @@ inline constexpr double emissivity_code_to_cgs = 1.126904483e44;
 inline constexpr double mev_to_kelvin = 1.160451812e10;
 inline constexpr double k_B_MeV_per_K = 8.617333262e-11;
 
+// specs/opacity-eos-evaluation.md "hc pin" (10 digits; also restated in
+// specs/verification-suite-design.md [MCNX-VER-05]).
+inline constexpr double hc_MeV_cm = 1.239841984e-10;
+
 } // namespace pinned
 
 // ---------------------------------------------------------------------------
@@ -274,6 +294,9 @@ static_assert(detail::approx_eq(mev_to_kelvin, pinned::mev_to_kelvin,
 static_assert(detail::approx_eq(k_B_MeV_per_K, pinned::k_B_MeV_per_K,
                                 detail::rtol_pinned),
               "k_B in MeV/K disagrees with the pinned value");
+static_assert(detail::approx_eq(hc_MeV_cm, pinned::hc_MeV_cm,
+                                detail::rtol_pinned),
+              "hc in MeV cm disagrees with the pinned value");
 
 // (b) Identities and round trips among full-precision computed values, at the
 //     machine tier of conventions-and-units.md:123,129-130.
@@ -320,6 +343,9 @@ static_assert(detail::round_trips(emissivity_code_to_cgs),
               "emissivity round trip");
 static_assert(detail::round_trips(mev_to_kelvin), "T[MeV]->T[K] round trip");
 static_assert(detail::round_trips(k_B_MeV_per_K), "T[K]->T[MeV] round trip");
+static_assert(detail::approx_eq(hc_MeV_cm * MeV_to_erg, h_cgs * c_cgs,
+                                detail::rtol_machine),
+              "hc[MeV cm] * (erg/MeV) is not h c in erg cm");
 static_assert(detail::approx_eq(1.5 * mev_to_kelvin * k_B_MeV_per_K, 1.5,
                                 detail::rtol_machine),
               "T[MeV] -> T[K] -> T[MeV] is not the identity");

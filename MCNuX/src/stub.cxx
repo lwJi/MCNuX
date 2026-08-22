@@ -1,4 +1,6 @@
+#include "mcnux_coefficients.hxx"
 #include "mcnux_opacity.hxx"
+#include "mcnux_opacity_analytic.hxx"
 #include "mcnux_particles.hxx"
 #include "mcnux_rng.hxx"
 #include "mcnux_srcterms.hxx"
@@ -28,7 +30,17 @@
 // mcnux_trp.hxx for the trapped-regime opacity-relabeling pure map of
 // specs/trapped-regime-treatment.md [MCNX-TRP-02/03] (the two exact
 // invariants, the 2021-convention monotonicity tripwire, the alpha = 1
-// identity endpoint).
+// identity endpoint), and
+// mcnux_opacity_analytic.hxx for the analytic (gray) opacity mode of
+// specs/verification-suite-design.md [MCNX-VER-05] feeding the coefficient
+// interface of specs/opacity-eos-evaluation.md:107-126 (per-species
+// pass-through of kappa_a0/kappa_s0, eta_scale = 0 -> eta = 0, the
+// Kirchhoff J_eq identity, E^3 scaling of 4 pi E^3/(hc)^3, nu_x emission),
+// and
+// mcnux_coefficients.hxx for the source-agnostic runtime dispatch of the same
+// interface (specs/opacity-eos-evaluation.md:118-126, [MCNX-VER-05]:
+// pinned OpacitySource values, the param.ccl keyword map, CoefficientSource
+// copyability).
 
 // Precision gate of specs/build-and-integration.md [MCNX-BLD-03]: all reals
 // are IEEE-754 binary64. The AMReX legs of the gate —

@@ -61,6 +61,17 @@
 //                        total_rate}              [MCNX-TRP-02]
 //  68..69   trp.relabel.monotonicity_{ka, ks}     [MCNX-TRP-03]
 //  70       trp.relabel.alpha_one_identity        [MCNX-TRP-02] (alpha = 1)
+//  71       units.hc_MeV_cm                       hc pin (opacity-eos-evaluation.md)
+//  72..73   opacity.analytic.{kappa_a,kappa_s}_passthrough
+//                                                [MCNX-VER-05]
+//  74       opacity.analytic.eta_closed_form      [MCNX-VER-05]
+//  75       opacity.analytic.kirchhoff_equilibrium [MCNX-VER-05] (J_eq)
+//  76       opacity.analytic.eta_scale_zero       [MCNX-VER-05]
+//  77       opacity.analytic.nux_emits            [MCNX-VER-05] (nu_x coverage)
+//  78       opacity.dispatch.analytic_selected    opacity-eos-evaluation.md:118-126
+//  79       opacity.dispatch.source_flip          opacity-eos-evaluation.md:118-126
+//  80       opacity.dispatch.keyword_map          param.ccl opacity_source
+//  81       opacity.dispatch.param_plumbing       param.ccl kappa_a0/kappa_s0/eta_scale
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -75,7 +86,9 @@
 //               digits, so agreement cannot be asserted at the machine tier
 //               (see the rtol_pinned comment in mcnux_units.hxx).
 
+#include "mcnux_coefficients.hxx"
 #include "mcnux_opacity.hxx"
+#include "mcnux_opacity_analytic.hxx"
 #include "mcnux_particles.hxx"
 #include "mcnux_rng.hxx"
 #include "mcnux_srcterms.hxx"
@@ -717,10 +730,188 @@ void append_trp_rows(Battery &b) {
 }
 
 // ---------------------------------------------------------------------------
-// The battery itself. Every check is a call into the shared headers; no
-// constant, fixture, or tolerance is restated here.
+// Rows 71..81 — the analytic (gray) opacity mode of
+// specs/verification-suite-design.md [MCNX-VER-05] and the source-agnostic
+// coefficient dispatch of specs/opacity-eos-evaluation.md:118-126, through
+// mcnux_opacity_analytic.hxx / mcnux_coefficients.hxx. The closed forms the
+// header values are judged against are written out here independently with
+// std::exp (the header's production path uses the same std::exp through its
+// functor, so the comparison is of evaluation ORDER and indexing, at the
+// machine tier). The last row reads the live MCNuX::opacity_source /
+// kappa_a0 / kappa_s0 / eta_scale parameters as they arrive from
+// DECLARE_CCTK_PARAMETERS, so it exercises the param.ccl KEYWORD/array
+// syntax end to end.
 // ---------------------------------------------------------------------------
-void run_battery(Battery &b) {
+
+// Independent closed form of [MCNX-VER-05]'s eta, written from the spec text
+// (verification-suite-design.md:215-219) rather than from the header.
+double eta_closed_form(double eta_scale, double kappa_a0, double E_MeV,
+                       double T_MeV) {
+  const double hc3 = hc_MeV_cm * hc_MeV_cm * hc_MeV_cm;
+  return eta_scale * c_cgs * kappa_a0 * (4.0 * detail::pi * E_MeV * E_MeV *
+                                         E_MeV / hc3) /
+         (std::exp(E_MeV / T_MeV) + 1.0);
+}
+
+void append_coefficient_rows(Battery &b, const char *opacity_source,
+                             const double *kappa_a0, const double *kappa_s0,
+                             const double *eta_scale) {
+  // Row 71 — hc recomputed from the SI-exact h, c, e against the spec's
+  // 10-digit pin (opacity-eos-evaluation.md "hc pin"), pinned tier.
+  b.add_pinned("units.hc_MeV_cm", hc_MeV_cm, pinned::hc_MeV_cm);
+
+  // Fixture: distinct exact binary fractions per species (a species-index
+  // slip is visible), eta_scale = 1 for Kirchhoff equilibrium.
+  const AnalyticOpacityParams fix = {
+      {0.5, 0.25, 0.125}, {2.0, 1.0, 0.75}, {1.0, 1.0, 1.0}};
+  const AnalyticOpacityParams fix_absorb_only = {
+      {0.5, 0.25, 0.125}, {2.0, 1.0, 0.75}, {0.0, 0.0, 0.0}};
+  const Species species[NUM_SPECIES] = {Species::NuE, Species::NuEBar,
+                                        Species::NuX};
+  constexpr int nE = 3, nT = 2;
+  const double Es[nE] = {1.0, 5.0, 20.0}; // MeV
+  const double Ts[nT] = {2.0, 10.0};      // MeV
+
+  // Rows 72..73 — kappa_a / kappa_s are the per-species constants, bitwise,
+  // independent of E and T.
+  bool ka_ok = true, ks_ok = true;
+  for (int i = 0; i < NUM_SPECIES; ++i)
+    for (int e = 0; e < nE; ++e)
+      for (int t = 0; t < nT; ++t) {
+        const Coefficients c =
+            analytic_coefficients(fix, species[i], Es[e], Ts[t]);
+        ka_ok = ka_ok && c.kappa_a == fix.kappa_a0[i];
+        ks_ok = ks_ok && c.kappa_s == fix.kappa_s0[i];
+      }
+  b.add_boolean("opacity.analytic.kappa_a_passthrough", ka_ok);
+  b.add_boolean("opacity.analytic.kappa_s_passthrough", ks_ok);
+
+  // Row 74 — eta against the independently written closed form over the
+  // (s, E, T) sweep, machine tier.
+  bool eta_ok = true;
+  for (int i = 0; i < NUM_SPECIES; ++i)
+    for (int e = 0; e < nE; ++e)
+      for (int t = 0; t < nT; ++t) {
+        const Coefficients c =
+            analytic_coefficients(fix, species[i], Es[e], Ts[t]);
+        eta_ok = eta_ok &&
+                 detail::approx_eq(c.eta,
+                                   eta_closed_form(fix.eta_scale[i],
+                                                   fix.kappa_a0[i], Es[e],
+                                                   Ts[t]),
+                                   detail::rtol_machine);
+      }
+  b.add_boolean("opacity.analytic.eta_closed_form", eta_ok);
+
+  // Row 75 — the J_eq Kirchhoff identity at eta_scale = 1:
+  // eta/(c kappa_a) = 4 pi E^3/(hc)^3 / (exp(E/T) + 1), machine tier.
+  bool kirchhoff_ok = true;
+  for (int i = 0; i < NUM_SPECIES; ++i)
+    for (int e = 0; e < nE; ++e)
+      for (int t = 0; t < nT; ++t) {
+        const Coefficients c =
+            analytic_coefficients(fix, species[i], Es[e], Ts[t]);
+        const double want = planck_phase_space_factor(Es[e]) /
+                            (std::exp(Es[e] / Ts[t]) + 1.0);
+        kirchhoff_ok = kirchhoff_ok &&
+                       detail::approx_eq(c.eta / (c_cgs * c.kappa_a), want,
+                                         detail::rtol_machine);
+      }
+  b.add_boolean("opacity.analytic.kirchhoff_equilibrium", kirchhoff_ok);
+
+  // Row 76 — eta_scale = 0 gives eta = 0 exactly (absorption-only medium);
+  // reported as the largest |eta| over the sweep, which must be exactly 0.
+  double eta_max = 0.0;
+  for (int i = 0; i < NUM_SPECIES; ++i)
+    for (int e = 0; e < nE; ++e)
+      for (int t = 0; t < nT; ++t) {
+        const Coefficients c =
+            analytic_coefficients(fix_absorb_only, species[i], Es[e], Ts[t]);
+        if (detail::cabs(c.eta) > eta_max)
+          eta_max = detail::cabs(c.eta);
+      }
+  b.add_exact("opacity.analytic.eta_scale_zero", eta_max, 0.0);
+
+  // Row 77 — nu_x coverage: kappa_a0(nu_x) > 0, eta_scale(nu_x) = 1 emits.
+  bool nux_ok = true;
+  for (int e = 0; e < nE; ++e)
+    for (int t = 0; t < nT; ++t)
+      nux_ok = nux_ok &&
+               analytic_coefficients(fix, Species::NuX, Es[e], Ts[t]).eta > 0.0;
+  b.add_boolean("opacity.analytic.nux_emits", nux_ok);
+
+  // Row 78 — dispatch with the Analytic source is bitwise the analytic
+  // formula on every field, over the sweep.
+  CoefficientSource src_analytic{};
+  src_analytic.source = OpacitySource::Analytic;
+  src_analytic.analytic = fix;
+  CoefficientSource src_table = src_analytic;
+  src_table.source = OpacitySource::Table;
+  const double rho_fix = 1.0e12, ye_fix = 0.3; // unused by the analytic leg
+  bool sel_ok = true, flip_ok = true;
+  for (int i = 0; i < NUM_SPECIES; ++i)
+    for (int e = 0; e < nE; ++e)
+      for (int t = 0; t < nT; ++t) {
+        const Coefficients want =
+            analytic_coefficients(fix, species[i], Es[e], Ts[t]);
+        const Coefficients got = coefficients(src_analytic, species[i],
+                                              rho_fix, Ts[t], ye_fix, Es[e]);
+        sel_ok = sel_ok && got.kappa_a == want.kappa_a &&
+                 got.kappa_s == want.kappa_s && got.eta == want.eta;
+        // Row 79 — flipping the source parameter changes the values: the
+        // Table leg differs from the Analytic leg in at least one field at
+        // every sweep point (true for the T10 placeholder and for real
+        // tables alike).
+        const Coefficients other = coefficients(src_table, species[i],
+                                                rho_fix, Ts[t], ye_fix, Es[e]);
+        flip_ok = flip_ok && (other.kappa_a != got.kappa_a ||
+                              other.kappa_s != got.kappa_s ||
+                              other.eta != got.eta);
+      }
+  b.add_boolean("opacity.dispatch.analytic_selected", sel_ok);
+  b.add_boolean("opacity.dispatch.source_flip", flip_ok);
+
+  // Row 80 — the param.ccl keyword map, exact for both declared values.
+  b.add_boolean("opacity.dispatch.keyword_map",
+                opacity_source_from_keyword("table") ==
+                        OpacitySource::Table &&
+                    opacity_source_from_keyword("analytic") ==
+                        OpacitySource::Analytic);
+
+  // Row 81 — end-to-end parameter plumbing: the CoefficientSource built from
+  // the live MCNuX::opacity_source / kappa_a0 / kappa_s0 / eta_scale
+  // parameters, with the source forced to Analytic, matches the closed form
+  // at the parfile's values (machine tier); the keyword itself must map to a
+  // declared source.
+  CoefficientSource live =
+      make_coefficient_source(opacity_source, kappa_a0, kappa_s0, eta_scale);
+  bool plumb_ok = live.source == opacity_source_from_keyword(opacity_source);
+  live.source = OpacitySource::Analytic;
+  for (int i = 0; i < NUM_SPECIES; ++i)
+    for (int e = 0; e < nE; ++e)
+      for (int t = 0; t < nT; ++t) {
+        const Coefficients got = coefficients(live, species[i], rho_fix,
+                                              Ts[t], ye_fix, Es[e]);
+        plumb_ok = plumb_ok && got.kappa_a == kappa_a0[i] &&
+                   got.kappa_s == kappa_s0[i] &&
+                   detail::approx_eq(got.eta,
+                                     eta_closed_form(eta_scale[i], kappa_a0[i],
+                                                     Es[e], Ts[t]),
+                                     detail::rtol_machine);
+      }
+  b.add_boolean("opacity.dispatch.param_plumbing", plumb_ok);
+}
+
+// ---------------------------------------------------------------------------
+// The battery itself. Every check is a call into the shared headers; no
+// constant, fixture, or tolerance is restated here. The trailing arguments
+// are the analytic-opacity parameters of param.ccl as they arrive from
+// DECLARE_CCTK_PARAMETERS (rows 71..81 are the first parameter-dependent
+// rows).
+// ---------------------------------------------------------------------------
+void run_battery(Battery &b, const char *opacity_source,
+                 const double *kappa_a0, const double *kappa_s0,
+                 const double *eta_scale) {
   // Rows 0..2 — Philox4x32-10 known-answer vectors, exact word equality.
   // rng-and-statistical-acceptance.md [MCNX-RNG-01], [MCNX-RNG-02].
   const char *const kat_names[detail::num_kat_vectors] = {
@@ -840,6 +1031,12 @@ void run_battery(Battery &b) {
   // tripwire, and alpha = 1 identity of specs/trapped-regime-treatment.md
   // [MCNX-TRP-02/03] through the mcnux_trp.hxx pure map.
   append_trp_rows(b);
+
+  // Rows 71..81 — the analytic opacity mode of
+  // specs/verification-suite-design.md [MCNX-VER-05] and the source-agnostic
+  // coefficient dispatch of specs/opacity-eos-evaluation.md:118-126 through
+  // mcnux_opacity_analytic.hxx / mcnux_coefficients.hxx.
+  append_coefficient_rows(b, opacity_source, kappa_a0, kappa_s0, eta_scale);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.
@@ -860,7 +1057,7 @@ extern "C" void MCNuX_SelfTest(CCTK_ARGUMENTS) {
   DECLARE_CCTK_PARAMETERS;
 
   Battery battery;
-  run_battery(battery);
+  run_battery(battery, opacity_source, kappa_a0, kappa_s0, eta_scale);
 
   const int nrows = battery.size();
   const int nslots = selftest_array_size();

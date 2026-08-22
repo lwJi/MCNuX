@@ -28,6 +28,46 @@ BOOLEAN test_synthetic_deposit "Deposit a synthetic, iteration-scaled event list
 {
 } "no"
 
+# Transport-coefficient source selection of specs/verification-suite-design.md
+# [MCNX-VER-05] and specs/opacity-eos-evaluation.md:118-126 (the coefficient
+# interface is source-agnostic; a runtime parameter selects the production
+# weaklib tables or the analytic per-species formulas). Both sources feed the
+# identical per-species (kappa_a, kappa_s, eta) triple of
+# src/mcnux_coefficients.hxx; everything downstream (sampling, events,
+# tallies, RNG, relabeling) is the same in both modes. STEERABLE=NEVER: the
+# captured coefficient source is built once at startup. The "table" source is
+# a transparent placeholder until T10 lands the table assembly.
+
+KEYWORD opacity_source "Transport-coefficient source" STEERABLE=NEVER
+{
+  "table"    :: "production weaklib tables (T10)"
+  "analytic" :: "per-species gray Kirchhoff-form coefficients"
+} "table"
+
+# Analytic (gray) opacity mode parameters of [MCNX-VER-05], one entry per
+# species in the binding species-index order of
+# specs/conventions-and-units.md [MCNX-CNV-06]: index 0 = nu_e,
+# 1 = nu_e_bar, 2 = nu_x. Per species s, with E and T in MeV:
+#   kappa_a(s, E) = kappa_a0(s)
+#   kappa_s(s, E) = kappa_s0(s)
+#   eta(s, E)     = eta_scale(s) * c kappa_a0(s) * 4 pi E^3/(hc)^3 / (exp(E/T) + 1)
+# Read only when opacity_source = "analytic".
+
+CCTK_REAL kappa_a0[3] "Analytic mode: constant absorption opacity per species" STEERABLE=NEVER
+{
+  0.0:* :: "cm^-1, >= 0"
+} 0.0
+
+CCTK_REAL kappa_s0[3] "Analytic mode: constant elastic scattering opacity per species" STEERABLE=NEVER
+{
+  0.0:* :: "cm^-1, >= 0"
+} 0.0
+
+CCTK_REAL eta_scale[3] "Analytic mode: emissivity scale on the Kirchhoff form per species" STEERABLE=NEVER
+{
+  0.0:* :: "dimensionless; 1 = equilibrium Kirchhoff, 0 = absorption-only"
+} 1.0
+
 # Single-rate pin of specs/carpetx-thorn-integration.md [MCNX-CTX-06]: MCNuX
 # reads the driver's subcycling switch so that MCNuX_ParamCheck can abort a
 # run configured with CarpetX::use_subcycling = yes. The CarpetX driver thorn
