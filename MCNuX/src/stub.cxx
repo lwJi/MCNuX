@@ -1,4 +1,5 @@
 #include "mcnux_coefficients.hxx"
+#include "mcnux_geodesic.hxx"
 #include "mcnux_opacity.hxx"
 #include "mcnux_particles.hxx"
 #include "mcnux_rng.hxx"
@@ -33,7 +34,11 @@
 // coefficient interface and its analytic (gray) source of
 // specs/verification-suite-design.md [MCNX-VER-05] (exact kappa_a/kappa_s
 // pass-through, source-enumerator distinctness, device-capturable parameter
-// layout; the hc pin itself is asserted in mcnux_units.hxx).
+// layout; the hc pin itself is asserted in mcnux_units.hxx), and
+// mcnux_geodesic.hxx for the flat-spacetime limit of the geodesic push of
+// specs/geodesic-propagation.md [MCNX-GEO-01/04] (dp_i/dt == 0 and |dx/dt|
+// == 1 exactly on the flat snapshot, one RK4 step an exact straight line
+// with bitwise-constant momentum, trivially-copyable gather functor).
 
 // Precision gate of specs/build-and-integration.md [MCNX-BLD-03]: all reals
 // are IEEE-754 binary64. The AMReX legs of the gate —

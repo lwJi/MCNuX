@@ -28,6 +28,21 @@ BOOLEAN test_synthetic_deposit "Deposit a synthetic, iteration-scaled event list
 {
 } "no"
 
+# Synthetic packet fixture switch of specs/geodesic-propagation.md
+# (Verification: flat-spacetime exactness; the `minkowski-freestream`
+# benchmark, and T16's Schwarzschild legs): MCNuX::test_synthetic_packets =
+# yes seeds a fixed, deterministic set of packets at initial time
+# (MCNuX_SeedSyntheticPackets), schedules the geodesic push over them in
+# every transport step, and mirrors their state into the
+# MCNuX::mcnux_packet_diag table for golden output. Off by default — the
+# fixture is verification scaffolding, not physics — and STEERABLE=NEVER,
+# because the table's storage and the routines' scheduling are decided from
+# it at startup.
+
+BOOLEAN test_synthetic_packets "Seed the deterministic synthetic packet fixture and push it along geodesics each transport step" STEERABLE=NEVER
+{
+} "no"
+
 # Transport-coefficient source of specs/opacity-eos-evaluation.md:118-124 and
 # specs/verification-suite-design.md [MCNX-VER-05]: the production weaklib
 # tables or the analytic (gray) Kirchhoff-form mode, both feeding the

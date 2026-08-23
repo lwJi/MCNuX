@@ -78,10 +78,9 @@ static_assert(PIdx::nattribs == AMREX_SPACEDIM + 3 + 1 &&
 // ---------------------------------------------------------------------------
 // Pure SoA (zero AoS bytes per particle; per-component contiguous arrays);
 // exemplar: WarpXParticleContainer. Legacy AoS containers are forbidden for
-// the packet population. Constructors are inherited from the base: the live
-// wiring to the driver's per-patch ParGDB
-// (ghext->patchdata.at(p).amrcore->GetParGDB()) belongs to the first task
-// that schedules a population owner, not to this header.
+// the packet population. Constructors are inherited from the base; the live
+// population is constructed on the driver's per-patch ParGDB
+// (ghext->patchdata.at(p).amrcore->GetParGDB()) by the owner below.
 class PacketContainer
     : public amrex::ParticleContainerPureSoA<PIdx::nattribs, IntIdx::nattribs> {
 public:
@@ -91,6 +90,16 @@ public:
 
 // The by-value tile view every packet kernel captures ([MCNX-GPU-02]).
 using PacketTileData = PacketContainer::ParticleTileType::ParticleTileDataType;
+
+// The runtime packet population, one container per CarpetX patch (the
+// AMReX ParGDB of a container is per-AmrCore, and CarpetX keeps one AmrCore
+// per patch). Defined in mcnux_geodesic.cxx: lazily constructed on first
+// touch from ghext->patchdata.at(patch).amrcore->GetParGDB(), which is valid
+// only once the grid hierarchy exists (first touched AT initial, never at
+// startup/paramcheck). Every packet operator (push, interactions, deposit,
+// redistribution) addresses the population through this accessor.
+PacketContainer &packet_population(int patch);
+int num_packet_patches();
 
 // ---------------------------------------------------------------------------
 // Exemplar tile kernel  [MCNX-GPU-02]

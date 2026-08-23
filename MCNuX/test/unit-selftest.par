@@ -14,9 +14,13 @@
 # run is deterministic without reference to the RNG seed: the battery's RNG
 # rows are known-answer vectors at pinned counters, not sampled draws.
 
+# ADMBaseX is required by every MCNuX run since MCNuX INHERITS: ADMBaseX
+# (read access to the spacetime interface for the geodesic push); nothing
+# here reads the metric, so no ODESolvers/initial data is needed.
 ActiveThorns = "
     CarpetX
     IOUtil
+    ADMBaseX
     MCNuX
 "
 

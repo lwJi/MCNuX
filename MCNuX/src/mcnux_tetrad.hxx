@@ -40,6 +40,18 @@
 
 #include <cmath>
 
+// Portable host/device annotation for the non-constexpr inline functions of
+// this header that packet kernels call (the constexpr ones are already
+// device-callable under nvcc's --expt-relaxed-constexpr, mcnux_rng.hxx).
+// Expands to nothing on a CPU toolchain, so the header stays free of AMReX
+// and cctk includes. Defined here because this is the lowest shared header
+// with a device-callable non-constexpr function (p_t_closure).
+#if defined(__CUDACC__) || defined(__HIPCC__)
+#define MCNUX_HOST_DEVICE __host__ __device__
+#else
+#define MCNUX_HOST_DEVICE
+#endif
+
 namespace MCNuX {
 
 namespace detail {
@@ -115,10 +127,24 @@ constexpr double momentum_norm2(const InverseSpatialMetric &gu, double px,
 // The null closure of [MCNX-GEO-02]: p^t = sqrt(gamma^{ij} p_i p_j)/alpha,
 // exactly as written at geodesic-propagation.md:91. Pure — recomputed from
 // the current (p_i, gamma^{ij}, alpha) at every call; p^t is never state.
-inline double p_t_closure(double px, double py, double pz,
-                          const InverseSpatialMetric &gu,
-                          double alpha) noexcept {
-  return std::sqrt(momentum_norm2(gu, px, py, pz)) / alpha;
+//
+// The closure formula is written ONCE, in the sqrt-templated core below
+// (the build_tetrad_with pattern): production callers use p_t_closure
+// (std::sqrt), compile-time predicates pass detail::csqrt. The geodesic
+// right-hand side (mcnux_geodesic.hxx) calls the core with its own sqrt
+// policy rather than re-deriving the closure.
+template <class SqrtF>
+constexpr double p_t_closure_with(double px, double py, double pz,
+                                  const InverseSpatialMetric &gu, double alpha,
+                                  SqrtF sqrt_fn) noexcept {
+  return sqrt_fn(momentum_norm2(gu, px, py, pz)) / alpha;
+}
+
+MCNUX_HOST_DEVICE inline double p_t_closure(double px, double py, double pz,
+                                            const InverseSpatialMetric &gu,
+                                            double alpha) noexcept {
+  return p_t_closure_with(px, py, pz, gu, alpha,
+                          [](double v) { return std::sqrt(v); });
 }
 
 // ---------------------------------------------------------------------------
