@@ -1,3 +1,4 @@
+#include "mcnux_coefficients.hxx"
 #include "mcnux_opacity.hxx"
 #include "mcnux_particles.hxx"
 #include "mcnux_rng.hxx"
@@ -28,7 +29,11 @@
 // mcnux_trp.hxx for the trapped-regime opacity-relabeling pure map of
 // specs/trapped-regime-treatment.md [MCNX-TRP-02/03] (the two exact
 // invariants, the 2021-convention monotonicity tripwire, the alpha = 1
-// identity endpoint).
+// identity endpoint), and mcnux_coefficients.hxx for the source-agnostic
+// coefficient interface and its analytic (gray) source of
+// specs/verification-suite-design.md [MCNX-VER-05] (exact kappa_a/kappa_s
+// pass-through, source-enumerator distinctness, device-capturable parameter
+// layout; the hc pin itself is asserted in mcnux_units.hxx).
 
 // Precision gate of specs/build-and-integration.md [MCNX-BLD-03]: all reals
 // are IEEE-754 binary64. The AMReX legs of the gate —

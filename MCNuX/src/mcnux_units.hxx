@@ -68,10 +68,13 @@ constexpr bool round_trips(double factor) noexcept {
 // Pinned defining constants  [MCNX-CNV-03]
 // ---------------------------------------------------------------------------
 // Exactly these five values are the inputs of every derivation below
-// (conventions-and-units.md:68-74). No other constant set carried by the
-// reference stack (HydroBaseX's README, CarpetX's openPMD metadata) is used
-// anywhere in MCNuX; the discrepancy is recorded and resolved by this pinning
-// (conventions-and-units.md:146).
+// (conventions-and-units.md:68-74), plus one SI-exact extension — the Planck
+// constant h, pinned by specs/opacity-eos-evaluation.md:356-361 for the
+// Kirchhoff normalization of the coefficient interface (it is not a
+// competing constant set: it is exact by definition, like c, k_B, and e). No
+// other constant set carried by the reference stack (HydroBaseX's README,
+// CarpetX's openPMD metadata) is used anywhere in MCNuX; the discrepancy is
+// recorded and resolved by this pinning (conventions-and-units.md:146).
 
 // Speed of light [cm/s], SI exact.
 inline constexpr double c_cgs = 2.99792458e10;
@@ -88,6 +91,14 @@ inline constexpr double G_cgs = 6.67430e-8;
 
 // Nominal solar mass parameter [cm^3 s^-2], IAU 2015 B3, exact by convention.
 inline constexpr double GM_sun_cgs = 1.3271244e26;
+
+// Planck constant [erg s], SI-2019 exact (h = 6.62607015e-34 J s). The
+// sixth, SI-exact extension of the constant set recorded as the "hc pin"
+// assumption of specs/opacity-eos-evaluation.md:356-361: it enters only
+// through hc below, the Kirchhoff-form normalization 4 pi E^3/(hc)^3 of the
+// emissivity (specs/verification-suite-design.md:216 [MCNX-VER-05] and the
+// table-source assembly of [MCNX-OPA-04]).
+inline constexpr double h_cgs = 6.62607015e-27;
 
 // ---------------------------------------------------------------------------
 // Derived conversion factors  [MCNX-CNV-04]
@@ -141,6 +152,12 @@ inline constexpr double rate_code_to_cgs = 1.0 / time_code_to_cgs;
 // Emissivity, M_sun c^2/(L^3 t) [erg cm^-3 s^-1].
 inline constexpr double emissivity_code_to_cgs =
     energy_density_code_to_cgs / time_code_to_cgs;
+
+// hc in microphysics units [MeV cm], derived from the pinned h, c, and e
+// (specs/opacity-eos-evaluation.md:359-361: "derived with the pinned e and
+// c; recomputation must agree to machine tier"). The only form in which the
+// Planck constant is consumed by MCNuX.
+inline constexpr double hc_MeV_cm = h_cgs * c_cgs / MeV_to_erg;
 
 // ---------------------------------------------------------------------------
 // Temperature at the WeakLibInterp boundary  [MCNX-CNV-05]
@@ -221,6 +238,10 @@ inline constexpr double emissivity_code_to_cgs = 1.126904483e44;
 inline constexpr double mev_to_kelvin = 1.160451812e10;
 inline constexpr double k_B_MeV_per_K = 8.617333262e-11;
 
+// The hc pin of specs/opacity-eos-evaluation.md:359-360 (10 digits), restated
+// as the binding constant of specs/verification-suite-design.md:220.
+inline constexpr double hc_MeV_cm = 1.239841984e-10;
+
 } // namespace pinned
 
 // ---------------------------------------------------------------------------
@@ -274,6 +295,10 @@ static_assert(detail::approx_eq(mev_to_kelvin, pinned::mev_to_kelvin,
 static_assert(detail::approx_eq(k_B_MeV_per_K, pinned::k_B_MeV_per_K,
                                 detail::rtol_pinned),
               "k_B in MeV/K disagrees with the pinned value");
+static_assert(detail::approx_eq(hc_MeV_cm, pinned::hc_MeV_cm,
+                                detail::rtol_pinned),
+              "hc in MeV cm disagrees with the pinned value "
+              "(specs/opacity-eos-evaluation.md:359-360)");
 
 // (b) Identities and round trips among full-precision computed values, at the
 //     machine tier of conventions-and-units.md:123,129-130.
@@ -300,6 +325,9 @@ static_assert(detail::approx_eq(emissivity_code_to_cgs * time_code_to_cgs,
                                 energy_density_code_to_cgs,
                                 detail::rtol_machine),
               "emissivity is not energy density per unit time");
+static_assert(detail::approx_eq(hc_MeV_cm * MeV_to_erg, h_cgs * c_cgs,
+                                detail::rtol_machine),
+              "hc[MeV cm] does not round-trip to h c [erg cm]");
 static_assert(detail::approx_eq(mass_density_code_to_cgs * c_cgs * c_cgs,
                                 energy_density_code_to_cgs,
                                 detail::rtol_machine),
