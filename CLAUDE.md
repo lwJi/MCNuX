@@ -7,16 +7,67 @@ MCNuX is a GPU Monte Carlo neutrino transport code implemented as a Cactus thorn
 ## Layout
 
 - `specs/` — the spec corpus: `README.md` (canonical) + 12 coded leaf specs; `specs/tools/validate_specs.sh` is the corpus linter.
-- `MCNuX/` — the production thorn (source root): `interface.ccl`, `param.ccl`, `configuration.ccl` (`REQUIRES CarpetX`, `REQUIRES WeakLibInterp`, `REQUIRES Loop`), `schedule.ccl`, `src/` (`make.code.defn`). Shared headers live flat in `MCNuX/src/`, named `mcnux_*.hxx`, contents in `namespace MCNuX` (`mcnux_units.hxx` constants/units/species, `mcnux_rng.hxx` Philox4x32-10 `u(S,q,e,k)`, `mcnux_particles.hxx` pure-SoA `PacketContainer`, `mcnux_opacity.hxx` WeakLibInterp call-boundary wrappers, `mcnux_tetrad.hxx` inverse metric/null closure/tetrad, `mcnux_trp.hxx` opacity relabeling map, `mcnux_srcterms.hxx` exchange-ledger arithmetic, `mcnux_coefficients.hxx` source-agnostic coefficient interface — `Coefficients`/`FluidState`/`AnalyticOpacityParams`/`CoefficientSource`, analytic Kirchhoff-form formulas, `evaluate_coefficients` table-vs-analytic dispatch, `mcnux_table_coeffs.hxx` baseline table-source coefficient assembly + νx mapping — `BaselineTableViews` trivially-copyable table-view bundle (caller-owned pointers) and `BaselineTableCoefficients`, the TableEval callable for `evaluate_coefficients`, `mcnux_table_range.hxx` table-range policy — `ClampCounters`, table-derived `rho_min_cgs` transparency floor, `RangedTableCoefficients` ranged TableEval wrapping `BaselineTableCoefficients` (table consumers use it, never the bare assembly), `inversion_usable`, `mcnux_geodesic.hxx` geodesic push — `MetricSnapshot`, `VertexMetricGather` trivially-copyable trilinear device functor over vertex-centered ADMBaseX fields, `geodesic_rhs`, RK4 `geodesic_step` templated on the gather, `mcnux_stats.hxx` 4σ statistical-acceptance reduction — pinned seed/`N_p` constants, `ZScore`/`zscore(estimate,expected,sigma)`; σ formulas supplied by consuming benchmarks); compiled sources: `mcnux_paramcheck.cxx` (subcycling guard), `mcnux_cadence.cxx` (transport cadence group + `ghext` relative-include idiom), `mcnux_coefficients.cxx` (parameter glue: `selected_coefficient_source()` via `CCTK_EQUALS`, `analytic_params_from_parameters()` from the `kappa_a0[3]`/`kappa_s0[3]`/`eta_scale[3]` array params), `mcnux_srcterms.cxx` (source-term zeroing + synthetic-deposit contributor; ccc grid functions written via `loop_all_device<1,1,1>` from `loop_device.hxx`), `mcnux_geodesic.cxx` (runtime packet-population owner `packet_population(int patch)`/`num_packet_patches()` — lazy per-patch `PacketContainer(amrcore->GetParGDB())`, declared in `mcnux_particles.hxx`; `for_each_packet_tile` + `amrex::ParallelFor` tile-walk idiom for particle operators — never `loop_all_device` for packets; `MCNuX_SeedSyntheticPackets` fixture gated by `test_synthetic_packets`, `MCNuX_GeodesicPush` scheduled `IN MCNuX_TransportStep`; `mcnux_packet_diag` grid array is the per-packet golden observable), `mcnux_selftest.cxx` (runtime battery core: the APPEND-ONLY index→name row table + ordered `append_*_rows` call sequence in `run_battery()`; check code lives in per-domain `mcnux_selftest_<domain>.cxx` files — rng_units, opacity, tetrad, srcterms, trp, coefficients, geodesic, table_coeffs, table_range, stats — with shared `Battery`/`synth_tval` machinery and appender declarations in `mcnux_selftest.hxx`), `stub.cxx` (compile-time selftest aggregation point — every shared header is `#include`d there). `MCNuX/test/` is the Cactus test home: `test.ccl` (`NPROCS 1`), `<name>.par` parfiles, `<name>/` golden dirs (golden TSVs copied verbatim from sandbox harness runs, never hand-authored); tests: `unit-selftest`, `source-zero-add`, `minkowski-freestream`, `schwarzschild-id`, `hydro-sphere-id`. Harness discovery: a `test/<name>.par` is only runnable once its golden dir `test/<name>/` exists; the first run against an empty golden dir is the capture step (vacuous "0 files identical"). CarpetX/AMReX rejects domains < 8 cells per direction (blocking_factor); off-origin test boxes must set `IO::out_{x,y,z}line_*` inside the domain. Benchmark parfiles set `IO::out_dir = $parfile`, `IO::out_fileinfo = "axis labels"`, `IO::parfile_write = no`, `CarpetX::out_metadata = no`.
-- `TestMCNuX/` — the sibling test thorn (initial-data writers for benchmarks): `interface.ccl` (`INHERITS: ADMBaseX HydroBaseX` — so every parfile activating TestMCNuX must activate both), `param.ccl` (`M`, hydro-profile params `rho0/T0/Ye0`, `*_amb`, `sphere_*`; `SHARES: ADMBaseX` with `EXTENDS KEYWORD initial_data`/`initial_lapse` adding `"Schwarzschild"` — cross-repo EXTENDS proven at T6; `SHARES: HydroBaseX` with `EXTENDS KEYWORD initial_hydro` adding `"uniform sphere"`/`"equilibration box"` — T7), `configuration.ccl` (`REQUIRES CarpetX`, `REQUIRES Loop`), `schedule.ccl` (keyword-conditional writers `IN ADMBaseX_InitialData`/`ADMBaseX_InitialGauge`/`HydroBaseX_InitialData`), `src/schwarzschild.cxx` (isotropic Schwarzschild writers, vertex-centered `GF3D2` + `loop_all_device<0,0,0>`), `src/hydro_profiles.cxx` (piecewise `(ρ,T[MeV],Yₑ)` writer — HydroBaseX fields are cell-centered: ccc `loop_all_device<1,1,1>` plus three staggered loops for `Avec{x,y,z}`). Ships no `test/` dir ([MCNX-BLD-05]); its parfiles live under `MCNuX/test/` ([MCNX-BLD-06]).
-- `agent_scripts/` — `build.sh`, `test.sh`, `gate_paramcheck.sh` + `gates/*.par` (non-harness exact-criterion gates), `sandbox/` (`setup.sh`, `mcnux.th` pinned ThornList, `README.md`), and `ci/` (GitHub Actions helpers: `mcnux-fetch.th` fetch list, `download.sh`, `build.sh` — consumed by `.github/workflows/ci.yml`, never run locally). Builds and the Cactus regression harness run only inside the sandbox (or CI).
+- `MCNuX/` — the production thorn: `interface.ccl`, `param.ccl`, `schedule.ccl`, `configuration.ccl` (`REQUIRES CarpetX WeakLibInterp Loop`), `src/` (see Source map), `test/` (see Testing).
+- `TestMCNuX/` — the sibling test thorn (initial-data writers for benchmarks). `INHERITS: ADMBaseX HydroBaseX`, so every parfile activating it must activate both. Its `param.ccl` EXTENDS ADMBaseX/HydroBaseX keyword parameters cross-repo (`"Schwarzschild"`, `"uniform sphere"`, `"equilibration box"`). Ships no `test/` dir ([MCNX-BLD-05]); its parfiles live under `MCNuX/test/` ([MCNX-BLD-06]).
+- `agent_scripts/` — `build.sh`, `test.sh`, `gate_paramcheck.sh` + `gates/*.par`, `sandbox/` (`setup.sh`, `mcnux.th` pinned ThornList, `README.md`), `ci/` (GitHub Actions helpers consumed by `.github/workflows/ci.yml`, never run locally).
 - `TODO.md` — the durable build plan (written by the plan orchestrator only).
 - `.research/` — transient plan-loop findings; regenerated every plan run.
 - Reference checkouts are siblings: `../amrex`, `../warpx`, `../CarpetX`, `../WeakLibInterp` (flesh only inside the sandbox).
 
+## Source map
+
+One line per file; read the file itself for signatures and details. Shared headers live flat in `MCNuX/src/`, named `mcnux_*.hxx`, contents in `namespace MCNuX`.
+
+Headers:
+
+- `mcnux_units.hxx` — pinned constants, unit conversions, species enumeration.
+- `mcnux_rng.hxx` — Philox4x32-10 stateless counter-based RNG.
+- `mcnux_particles.hxx` — pure-SoA `PacketContainer`; declares the packet-population accessors owned by `mcnux_geodesic.cxx`.
+- `mcnux_opacity.hxx` — WeakLibInterp call-boundary wrappers.
+- `mcnux_tetrad.hxx` — inverse metric, null closure, tetrad construction.
+- `mcnux_trp.hxx` — trapped-regime opacity relabeling map.
+- `mcnux_srcterms.hxx` — exchange-ledger arithmetic.
+- `mcnux_coefficients.hxx` — source-agnostic coefficient interface, analytic Kirchhoff-form formulas, table-vs-analytic dispatch.
+- `mcnux_table_coeffs.hxx` — baseline table-source coefficient assembly + νx dataset mapping.
+- `mcnux_table_range.hxx` — table-range policy: clamping with counters, table-derived transparency floor, `RangedTableCoefficients` wrapper.
+- `mcnux_geodesic.hxx` — geodesic push: metric snapshot/gather, RK4 step.
+- `mcnux_stats.hxx` — 4σ statistical-acceptance reduction; pinned seed and packet-count constants.
+
+Compiled sources:
+
+- `mcnux_paramcheck.cxx` — subcycling guard.
+- `mcnux_cadence.cxx` — transport cadence group.
+- `mcnux_coefficients.cxx` — parameter glue: coefficient-source selection and analytic params from `param.ccl` arrays.
+- `mcnux_srcterms.cxx` — source-term zeroing + synthetic-deposit contributor.
+- `mcnux_geodesic.cxx` — runtime packet-population owner (lazy per-patch containers), synthetic-packet seeding fixture, geodesic push scheduled `IN MCNuX_TransportStep`.
+- `mcnux_selftest.cxx` / `mcnux_selftest.hxx` / `mcnux_selftest_<domain>.cxx` — runtime selftest battery: core row table and ordered appender sequence in the first, shared machinery and appender declarations in the header, check code in the per-domain files.
+- `stub.cxx` — compile-time selftest aggregation point.
+
+`TestMCNuX/src/`:
+
+- `schwarzschild.cxx` — isotropic Schwarzschild metric/lapse writers (vertex-centered).
+- `hydro_profiles.cxx` — piecewise (ρ, T[MeV], Yₑ) hydro-profile writer (cell-centered, plus staggered `Avec` loops).
+
+## Idioms & invariants
+
+- Packet operators walk tiles via `for_each_packet_tile` + `amrex::ParallelFor` — never `loop_all_device` for packets. Grid functions use `loop_all_device` from `loop_device.hxx` with the field's centering (`<1,1,1>` ccc, `<0,0,0>` vertex).
+- Table consumers use `RangedTableCoefficients`, never the bare `BaselineTableCoefficients` assembly.
+- The selftest index→name row table in `mcnux_selftest.cxx` is APPEND-ONLY; new checks go in a per-domain `mcnux_selftest_<domain>.cxx` with its appender declared in `mcnux_selftest.hxx`.
+- Every shared header is `#include`d from `stub.cxx` so its static_asserts run on every build.
+- CarpetX's `ghext` is reached via the relative-include idiom (`mcnux_cadence.cxx` is the precedent).
+- The `mcnux_packet_diag` grid array is the per-packet golden observable for transport tests.
+
+## Testing
+
+- `MCNuX/test/` is the Cactus test home: `test.ccl` (`NPROCS 1`), `<name>.par` parfiles, `<name>/` golden dirs. Current tests: `unit-selftest`, `source-zero-add`, `minkowski-freestream`, `schwarzschild-id`, `hydro-sphere-id`.
+- Golden TSVs are copied verbatim from sandbox harness runs, never hand-authored. Harness discovery: a `test/<name>.par` is only runnable once its golden dir `test/<name>/` exists; the first run against an empty golden dir is the capture step (vacuous "0 files identical").
+- Parfile requirements: every MCNuX parfile needs `Cactus::presync_mode = "mixed-error"` and `ADMBaseX` in `ActiveThorns` (MCNuX `INHERITS: ADMBaseX`); runs that read the metric also need `ODESolvers` active (ADMBaseX initial data is scheduled only `IN ODESolvers_Initial`); parfiles activating `TestMCNuX` must also activate `ADMBaseX` and `HydroBaseX`.
+- CarpetX/AMReX rejects domains < 8 cells per direction (blocking_factor); off-origin test boxes must set `IO::out_{x,y,z}line_*` inside the domain.
+- Benchmark parfiles set `IO::out_dir = $parfile`, `IO::out_fileinfo = "axis labels"`, `IO::parfile_write = no`, `CarpetX::out_metadata = no`.
+
 ## Build & run
 
 - Build: `./agent_scripts/build.sh` from the repo root, inside the sandbox only (needs `$CACTUSX`/`$ETKCFG`, set by `agent_scripts/sandbox/setup.sh`; arrangement symlinks must exist). Incremental rebuilds take seconds. After a reverted/discarded task, stale objects can linger in `$CACTUSX/configs/mcnux/build/MCNuX/` (e.g. `.cxx/.cxx.d/.cxx.o` for deleted sources, or `.cxx.d` dependency files still naming a deleted/renamed *header* — "No rule to make target") and break the build — remove them (or clean-rebuild the thorn) before diagnosing further.
-- Tests: `./agent_scripts/test.sh` (Cactus regression harness, sandbox only). Compile-time selftests (static_asserts in shared headers) run on every build via inclusion from `MCNuX/src/stub.cxx`.
-- Non-harness gates: `./agent_scripts/gate_paramcheck.sh` (sandbox only, after `build.sh`) — exact-criterion check for deliberately-aborting runs the harness cannot express; parfiles in `agent_scripts/gates/*.par`, transient output under `$CACTUSX/GATE/mcnux/`, never in the repo. Precedent for later gate tasks (T25b/T25c). Any MCNuX parfile needs `Cactus::presync_mode = "mixed-error"` to pass CarpetX's own paramcheck and `ADMBaseX` in `ActiveThorns` (MCNuX `INHERITS: ADMBaseX`); runs that read the metric (transport) also need `ODESolvers` active, since ADMBaseX initial data is scheduled only `IN ODESolvers_Initial`.
+- Tests: `./agent_scripts/test.sh` (Cactus regression harness, sandbox only). Compile-time selftests (static_asserts in shared headers) run on every build via `stub.cxx`.
+- Non-harness gates: `./agent_scripts/gate_paramcheck.sh` (sandbox only, after `build.sh`) — exact-criterion check for deliberately-aborting runs the harness cannot express; parfiles in `agent_scripts/gates/*.par`, transient output under `$CACTUSX/GATE/mcnux/`, never in the repo.
 - Spec-corpus linter: `bash specs/tools/validate_specs.sh` from the repo root, sandbox only (no build needed) — the `flesh/` reference root resolves solely through `MCNX_FLESH_ROOT`, persisted by `agent_scripts/sandbox/setup.sh`; outside the sandbox every `flesh/...` citation check fails spuriously (environment defect, never a corpus defect).
