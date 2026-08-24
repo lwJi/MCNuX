@@ -11,6 +11,62 @@ CCTK_REAL M "Black hole mass of the Schwarzschild initial data (geometrized unit
   0.0:* :: "positive"
 } 1.0
 
+# specs/verification-suite-design.md [MCNX-VER-04]: the hydro test-profile
+# parameters. Values pass through verbatim in MCNuX's microphysics units:
+# rho in g/cm^3, temperature in MeV (the [MCNX-HYD-04] interface contract --
+# HydroBaseX itself declares no unit), Ye dimensionless. Sphere geometry is in
+# geometrized coordinates.
+
+CCTK_REAL rho0 "Rest-mass density inside the sphere / everywhere in the box (g/cm^3)"
+{
+  0.0:* :: "non-negative"
+} 1.0e12
+
+CCTK_REAL T0 "Temperature inside the sphere / everywhere in the box (MeV)"
+{
+  0.0:* :: "non-negative"
+} 5.0
+
+CCTK_REAL Ye0 "Electron fraction inside the sphere / everywhere in the box (dimensionless)"
+{
+  0.0:1.0 :: "physical electron fraction"
+} 0.25
+
+CCTK_REAL rho_amb "Ambient rest-mass density outside the sphere (g/cm^3)"
+{
+  0.0:* :: "non-negative"
+} 1.0e6
+
+CCTK_REAL T_amb "Ambient temperature outside the sphere (MeV)"
+{
+  0.0:* :: "non-negative"
+} 1.0
+
+CCTK_REAL Ye_amb "Ambient electron fraction outside the sphere (dimensionless)"
+{
+  0.0:1.0 :: "physical electron fraction"
+} 0.45
+
+CCTK_REAL sphere_x0 "Sphere center x coordinate (geometrized coordinates)"
+{
+  *:* :: "any"
+} 0.0
+
+CCTK_REAL sphere_y0 "Sphere center y coordinate (geometrized coordinates)"
+{
+  *:* :: "any"
+} 0.0
+
+CCTK_REAL sphere_z0 "Sphere center z coordinate (geometrized coordinates)"
+{
+  *:* :: "any"
+} 0.0
+
+CCTK_REAL sphere_radius "Sphere radius R_s (geometrized coordinates)"
+{
+  (0.0:* :: "positive"
+} 0.5
+
 # [MCNX-VER-02]: TestMCNuX extends the ADMBaseX initial-data keywords with
 # the "Schwarzschild" dataset (isotropic coordinates). No initial_shift
 # extension: ADMBaseX's own "zero" default is already exact for this static,
@@ -25,4 +81,15 @@ EXTENDS KEYWORD initial_data
 EXTENDS KEYWORD initial_lapse
 {
   "Schwarzschild" :: "Isotropic Schwarzschild lapse"
+}
+
+# [MCNX-VER-02/04]: TestMCNuX extends the HydroBaseX initial-data keyword with
+# the two analytic (rho, T, Ye) test profiles. The quoted keyword values are
+# binding (parameter files and golden data reference them).
+SHARES: HydroBaseX
+
+EXTENDS KEYWORD initial_hydro
+{
+  "uniform sphere"    :: "Uniform (rho0, T0, Ye0) sphere in a (rho_amb, T_amb, Ye_amb) ambient medium, fluid at rest"
+  "equilibration box" :: "Constant (rho0, T0, Ye0) everywhere, fluid at rest"
 }

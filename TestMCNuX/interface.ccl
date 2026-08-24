@@ -3,10 +3,11 @@
 IMPLEMENTS: TestMCNuX
 
 # The Schwarzschild initial-data writers WRITE the ADMBaseX metric, curvature,
-# and lapse grid functions; the CST accepts cross-thorn WRITES: clauses only
+# and lapse grid functions, and the hydro-profile writers WRITE the HydroBaseX
+# fluid grid functions; the CST accepts cross-thorn WRITES: clauses only
 # through an INHERITS: (same rule as the READS: precedent in
-# MCNuX/interface.ccl). This is write access to the published spacetime
-# interface's declared initial-data schedule groups only.
-INHERITS: ADMBaseX
+# MCNuX/interface.ccl). This is write access to the published spacetime/fluid
+# interfaces' declared initial-data schedule groups only.
+INHERITS: ADMBaseX HydroBaseX
 
 USES INCLUDE HEADER: loop_device.hxx

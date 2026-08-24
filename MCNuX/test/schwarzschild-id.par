@@ -18,13 +18,16 @@
 #
 # ODESolvers must be active: ADMBaseX schedules ADMBaseX_InitialData and
 # ADMBaseX_InitialGauge only IN ODESolvers_Initial when ODESolvers is active,
-# and the TestMCNuX writers live in those groups.
+# and the TestMCNuX writers live in those groups. HydroBaseX must be active
+# because TestMCNuX INHERITS: HydroBaseX (for the hydro-profile writers);
+# its default "vacuum" initializer runs but nothing hydro is output here.
 
 ActiveThorns = "
     CarpetX
     IOUtil
     ODESolvers
     ADMBaseX
+    HydroBaseX
     MCNuX
     TestMCNuX
 "
