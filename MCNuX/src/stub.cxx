@@ -1,5 +1,6 @@
 #include "mcnux_coefficients.hxx"
 #include "mcnux_geodesic.hxx"
+#include "mcnux_interactions.hxx"
 #include "mcnux_opacity.hxx"
 #include "mcnux_particles.hxx"
 #include "mcnux_rng.hxx"

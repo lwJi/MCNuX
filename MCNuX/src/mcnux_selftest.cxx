@@ -119,6 +119,32 @@
 //                                                 step beyond 4 sigma fails)
 // 105       stats.constants                       [MCNX-RNG-07] (pinned N_p,
 //                                                 seeds, 4 sigma bound)
+// 106       int.draw.closed_form                  [MCNX-INT-01] (draw law vs
+//                                                 independently composed
+//                                                 closed forms, machine)
+// 107       int.draw.u_zero_exact                 [MCNX-INT-01] (u = 0,
+//                                                 kappa > 0 -> Dt == 0,
+//                                                 exact)
+// 108       int.draw.zero_opacity_no_nan          [MCNX-INT-02] (kappa = 0 ->
+//                                                 +inf sentinel, never NaN,
+//                                                 incl. the u = 0 0/0 path)
+// 109       int.compete.tie_scatter               [MCNX-INT-02] (bitwise ties
+//                                                 Dt_s == Dt_a resolve to
+//                                                 scattering, exact)
+// 110       int.compete.ordering                  [MCNX-INT-02] (event vs
+//                                                 cell-exit vs step-end
+//                                                 sweep, strict precedence,
+//                                                 +inf sentinels)
+// 111       int.nu.flat_identity                  [MCNX-INT-01] (nu = -p_mu
+//                                                 u^mu ADM shortcut, flat
+//                                                 static + boosted, vs
+//                                                 metric_dot route)
+// 112       int.nu.curved_identity                [MCNX-INT-01] (same, pinned
+//                                                 curved fixture, machine)
+// 113       int.rng.episode_draw_map              [MCNX-INT-06] (k-order /
+//                                                 e-increment two-episode
+//                                                 script vs direct
+//                                                 u(S, q, e, k), exact)
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -204,6 +230,12 @@ void run_battery(Battery &b) {
   // constants of specs/rng-and-statistical-acceptance.md [MCNX-RNG-07] and
   // specs/verification-suite-design.md [MCNX-VER-07] through mcnux_stats.hxx.
   append_stats_rows(b);
+
+  // Rows 106..113 — the interaction-time draw law, episode competition, and
+  // RNG draw map of specs/neutrino-matter-interactions.md
+  // [MCNX-INT-01/02/06] through the mcnux_interactions.hxx pure functions on
+  // pinned deterministic fixtures.
+  append_interaction_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.

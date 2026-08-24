@@ -31,6 +31,7 @@ Headers:
 - `mcnux_table_coeffs.hxx` — baseline table-source coefficient assembly + νx dataset mapping.
 - `mcnux_table_range.hxx` — table-range policy: clamping with counters, table-derived transparency floor, `RangedTableCoefficients` wrapper.
 - `mcnux_geodesic.hxx` — geodesic push: metric snapshot/gather, RK4 step.
+- `mcnux_interactions.hxx` — interaction-time draw, fluid-frame energy ν, episode competition, episode draw-map wrappers.
 - `mcnux_stats.hxx` — 4σ statistical-acceptance reduction; pinned seed and packet-count constants.
 
 Compiled sources:
