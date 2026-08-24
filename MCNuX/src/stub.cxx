@@ -3,6 +3,7 @@
 #include "mcnux_opacity.hxx"
 #include "mcnux_particles.hxx"
 #include "mcnux_rng.hxx"
+#include "mcnux_selftest.hxx"
 #include "mcnux_srcterms.hxx"
 #include "mcnux_stats.hxx"
 #include "mcnux_table_coeffs.hxx"
@@ -55,7 +56,10 @@
 // specs/rng-and-statistical-acceptance.md [MCNX-RNG-07] and
 // specs/verification-suite-design.md [MCNX-VER-07] (the pinned packet count
 // and seeds, the exact z closed form, the non-strict 4 sigma boundary, and
-// the trivially-copyable four-field ZScore shape).
+// the trivially-copyable four-field ZScore shape). mcnux_selftest.hxx (the
+// runtime battery's shared row-accumulator machinery) carries no compile-time
+// selftests of its own; it is included so the every-shared-header rule stays
+// uniform.
 
 // Precision gate of specs/build-and-integration.md [MCNX-BLD-03]: all reals
 // are IEEE-754 binary64. The AMReX legs of the gate —
