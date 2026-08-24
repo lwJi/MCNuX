@@ -4,6 +4,7 @@
 #include "mcnux_particles.hxx"
 #include "mcnux_rng.hxx"
 #include "mcnux_srcterms.hxx"
+#include "mcnux_table_coeffs.hxx"
 #include "mcnux_tetrad.hxx"
 #include "mcnux_trp.hxx"
 #include "mcnux_units.hxx"
@@ -35,6 +36,10 @@
 // specs/verification-suite-design.md [MCNX-VER-05] (exact kappa_a/kappa_s
 // pass-through, source-enumerator distinctness, device-capturable parameter
 // layout; the hc pin itself is asserted in mcnux_units.hxx), and
+// mcnux_table_coeffs.hxx for the baseline table-source coefficient assembly
+// and nu_x mapping of specs/opacity-eos-evaluation.md [MCNX-OPA-04/05]
+// (TableEval-contract conformance, trivially-copyable view bundle/functor,
+// nu_x has-no-slot special-case pin, lepton-number mu_nu sign map), and
 // mcnux_geodesic.hxx for the flat-spacetime limit of the geodesic push of
 // specs/geodesic-propagation.md [MCNX-GEO-01/04] (dp_i/dt == 0 and |dx/dt|
 // == 1 exactly on the flat snapshot, one RK4 step an exact straight line
