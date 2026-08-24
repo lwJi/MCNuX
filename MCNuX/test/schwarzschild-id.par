@@ -1,0 +1,91 @@
+# schwarzschild-id — initial-data smoke test for the TestMCNuX isotropic
+# Schwarzschild writers of specs/verification-suite-design.md
+# [MCNX-VER-02/03].
+#
+# The "Schwarzschild" values of ADMBaseX::initial_data/initial_lapse are
+# EXTENDS-KEYWORD additions from TestMCNuX; the writers evaluate the closed
+# forms
+#
+#   r = sqrt(x^2+y^2+z^2), psi = 1 + M/(2r),
+#   gamma_ij = psi^4 delta_ij, K_ij = 0,
+#   alpha = (1 - M/(2r)) / (1 + M/(2r))
+#
+# at every vertex. The golden TSVs are diffed at the harness defaults
+# ABSTOL = RELTOL = 1e-12; validity against the closed forms themselves was
+# spot-checked at the machine tier (~1e-14 relative) when the goldens were
+# captured. The shift stays on ADMBaseX's own "zero" initializer (exact for
+# this static beta^i = 0 solution), so it is not output here.
+#
+# ODESolvers must be active: ADMBaseX schedules ADMBaseX_InitialData and
+# ADMBaseX_InitialGauge only IN ODESolvers_Initial when ODESolvers is active,
+# and the TestMCNuX writers live in those groups.
+
+ActiveThorns = "
+    CarpetX
+    IOUtil
+    ODESolvers
+    ADMBaseX
+    MCNuX
+    TestMCNuX
+"
+
+# Mandatory for any MCNuX run: CarpetX's own CCTK_PARAMCHECK routine rejects
+# every other presync mode.
+Cactus::presync_mode = "mixed-error"
+
+# All MCNuX verification scaffolding off: this benchmark exercises only the
+# TestMCNuX initial-data writers. The analytic coefficient source keeps the
+# run table-free.
+MCNuX::test_synthetic_packets = no
+MCNuX::test_synthetic_deposit = no
+MCNuX::run_selftests = no
+MCNuX::opacity_source = "analytic"
+
+# The subject of this benchmark: the TestMCNuX Schwarzschild writers.
+ADMBaseX::initial_data = "Schwarzschild"
+ADMBaseX::initial_lapse = "Schwarzschild"
+ADMBaseX::initial_shift = "zero"
+TestMCNuX::M = 1.0
+
+# Offset single-level box x,y,z in [2, 4] (8^3 cells, dx = 0.25; the AMReX
+# blocking_factor is 8, so 8 is also the minimum cell count): entirely in
+# isotropic r > M/2 = 0.5 (r ranges over [sqrt(12), sqrt(48)]), off-origin so
+# psi^4 and alpha vary nontrivially along every output line.
+CarpetX::xmin = 2.0
+CarpetX::ymin = 2.0
+CarpetX::zmin = 2.0
+CarpetX::xmax = 4.0
+CarpetX::ymax = 4.0
+CarpetX::zmax = 4.0
+CarpetX::ncells_x = 8
+CarpetX::ncells_y = 8
+CarpetX::ncells_z = 8
+
+# Initial-data smoke only: no evolution.
+Cactus::cctk_itlast = 0
+
+IO::out_dir = $parfile
+IO::out_every = 1
+IO::parfile_write = no
+
+# Keep the column-label header but drop IOUtil's creation date, hostname, and
+# absolute parameter-file path (see unit-selftest.par).
+IO::out_fileinfo = "axis labels"
+
+CarpetX::out_metadata = no
+
+# 1D output lines through (y,z) = (3,3) etc. — the default origin-anchored
+# lines lie outside the offset box. y = z = 3 hits vertices exactly (dx = 0.25).
+IO::out_xline_y = 3.0
+IO::out_xline_z = 3.0
+IO::out_yline_x = 3.0
+IO::out_yline_z = 3.0
+IO::out_zline_x = 3.0
+IO::out_zline_y = 3.0
+
+# The golden data: metric, curvature (identically zero), and lapse.
+CarpetX::out_tsv_vars = "
+    ADMBaseX::metric
+    ADMBaseX::curv
+    ADMBaseX::lapse
+"

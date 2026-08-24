@@ -1,1 +1,28 @@
 # Parameter definitions for thorn TestMCNuX
+
+RESTRICTED:
+
+# specs/verification-suite-design.md [MCNX-VER-03]: the Schwarzschild mass
+# parameter (default 1, geometrized units). The closed forms are valid and
+# exercised only for isotropic r > M/2; every pinned benchmark places its
+# domain entirely there.
+CCTK_REAL M "Black hole mass of the Schwarzschild initial data (geometrized units)"
+{
+  0.0:* :: "positive"
+} 1.0
+
+# [MCNX-VER-02]: TestMCNuX extends the ADMBaseX initial-data keywords with
+# the "Schwarzschild" dataset (isotropic coordinates). No initial_shift
+# extension: ADMBaseX's own "zero" default is already exact for this static,
+# beta^i = 0 solution.
+SHARES: ADMBaseX
+
+EXTENDS KEYWORD initial_data
+{
+  "Schwarzschild" :: "Isotropic Schwarzschild metric and extrinsic curvature"
+}
+
+EXTENDS KEYWORD initial_lapse
+{
+  "Schwarzschild" :: "Isotropic Schwarzschild lapse"
+}

@@ -1,3 +1,12 @@
 # Interface definition for thorn TestMCNuX
 
 IMPLEMENTS: TestMCNuX
+
+# The Schwarzschild initial-data writers WRITE the ADMBaseX metric, curvature,
+# and lapse grid functions; the CST accepts cross-thorn WRITES: clauses only
+# through an INHERITS: (same rule as the READS: precedent in
+# MCNuX/interface.ccl). This is write access to the published spacetime
+# interface's declared initial-data schedule groups only.
+INHERITS: ADMBaseX
+
+USES INCLUDE HEADER: loop_device.hxx

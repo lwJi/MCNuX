@@ -1,1 +1,25 @@
 # Schedule definitions for thorn TestMCNuX
+
+# specs/verification-suite-design.md [MCNX-VER-02/03]: the Schwarzschild
+# writers hook the ADMBaseX initial-data schedule groups, mirroring the shape
+# of ADMBaseX's own keyword-conditional blocks (CarpetX/ADMBaseX/schedule.ccl).
+# Those groups exist only when ODESolvers is active (they are scheduled
+# IN ODESolvers_Initial), so every parfile selecting "Schwarzschild" must
+# activate ODESolvers. Gauge-after-data ordering is guaranteed by ADMBaseX
+# itself (ADMBaseX_InitialGauge AFTER ADMBaseX_InitialData).
+
+if (CCTK_EQUALS(initial_data, "Schwarzschild")) {
+  SCHEDULE TestMCNuX_Schwarzschild_InitialData IN ADMBaseX_InitialData
+  {
+    LANG: C
+    WRITES: ADMBaseX::metric(everywhere) ADMBaseX::curv(everywhere)
+  } "Set up isotropic Schwarzschild metric and extrinsic curvature"
+}
+
+if (CCTK_EQUALS(initial_lapse, "Schwarzschild")) {
+  SCHEDULE TestMCNuX_Schwarzschild_InitialLapse IN ADMBaseX_InitialGauge
+  {
+    LANG: C
+    WRITES: ADMBaseX::lapse(everywhere)
+  } "Set isotropic Schwarzschild lapse"
+}
