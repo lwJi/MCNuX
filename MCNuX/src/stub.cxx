@@ -4,6 +4,7 @@
 #include "mcnux_particles.hxx"
 #include "mcnux_rng.hxx"
 #include "mcnux_srcterms.hxx"
+#include "mcnux_stats.hxx"
 #include "mcnux_table_coeffs.hxx"
 #include "mcnux_table_range.hxx"
 #include "mcnux_tetrad.hxx"
@@ -49,7 +50,12 @@
 // mcnux_geodesic.hxx for the flat-spacetime limit of the geodesic push of
 // specs/geodesic-propagation.md [MCNX-GEO-01/04] (dp_i/dt == 0 and |dx/dt|
 // == 1 exactly on the flat snapshot, one RK4 step an exact straight line
-// with bitwise-constant momentum, trivially-copyable gather functor).
+// with bitwise-constant momentum, trivially-copyable gather functor), and
+// mcnux_stats.hxx for the statistical-acceptance machinery of
+// specs/rng-and-statistical-acceptance.md [MCNX-RNG-07] and
+// specs/verification-suite-design.md [MCNX-VER-07] (the pinned packet count
+// and seeds, the exact z closed form, the non-strict 4 sigma boundary, and
+// the trivially-copyable four-field ZScore shape).
 
 // Precision gate of specs/build-and-integration.md [MCNX-BLD-03]: all reals
 // are IEEE-754 binary64. The AMReX legs of the gate —

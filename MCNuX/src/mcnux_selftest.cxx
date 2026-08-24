@@ -97,6 +97,18 @@
 //                                                 tabulated lower bounds)
 //  99       tblrange.inversion_protocol           [MCNX-OPA-07] (pinned
 //                                                 failing inversion input)
+// 100       stats.z.exact                         [MCNX-VER-07] (z closed
+//                                                 form, exact fixture)
+// 101       stats.z.sign                          [MCNX-VER-07] (negative z,
+//                                                 exact, in band)
+// 102       stats.z.zero                          [MCNX-VER-07] (estimate ==
+//                                                 expected -> z == 0, pass)
+// 103       stats.z.boundary_pass                 [MCNX-RNG-07] (z exactly 4
+//                                                 passes: non-strict <=)
+// 104       stats.z.boundary_fail                 [MCNX-RNG-07] (one 2^-20
+//                                                 step beyond 4 sigma fails)
+// 105       stats.constants                       [MCNX-RNG-07] (pinned N_p,
+//                                                 seeds, 4 sigma bound)
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -117,6 +129,7 @@
 #include "mcnux_particles.hxx"
 #include "mcnux_rng.hxx"
 #include "mcnux_srcterms.hxx"
+#include "mcnux_stats.hxx"
 #include "mcnux_table_coeffs.hxx"
 #include "mcnux_table_range.hxx"
 #include "mcnux_tetrad.hxx"
@@ -131,6 +144,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <vector>
 
@@ -1617,6 +1631,65 @@ void append_table_range_rows(Battery &b) {
 }
 
 // ---------------------------------------------------------------------------
+// Rows 100..105 — the statistical-acceptance machinery of
+// specs/rng-and-statistical-acceptance.md [MCNX-RNG-07] and
+// specs/verification-suite-design.md [MCNX-VER-07] (T26) through
+// mcnux_stats.hxx. All rows are exact tier on exact binary-fraction fixtures
+// (halves/quarters/2^-20 steps), so every equality is bitwise: the z closed
+// form and its sign, the z = 0 degenerate agreement point, the NON-STRICT
+// 4 sigma boundary (z exactly 4 passes; one 2^-20 step beyond fails), and
+// the pinned constants (N_p = 2^20, primary seed 0x4D434E58, secondary seed,
+// the 4 sigma bound). Sigma is a caller input throughout — no sigma formula
+// is exercised or owned here (sigma ownership is per-benchmark,
+// verification-suite-design.md:453-454).
+// ---------------------------------------------------------------------------
+
+void append_stats_rows(Battery &b) {
+  // Row 100 — z closed form, exact: (2.5 - 1.0)/0.5 == 3.0 bitwise.
+  b.add_exact("stats.z.exact", zscore(2.5, 1.0, 0.5).z, 3.0);
+
+  // Row 101 — z carries the sign of estimate - expected and the four-field
+  // shape echoes its inputs: (0.25 - 1.0)/0.25 == -3.0 exactly, in band.
+  {
+    const ZScore r = zscore(0.25, 1.0, 0.25);
+    b.add_boolean("stats.z.sign", r.z == -3.0 && r.pass && r.estimate == 0.25 &&
+                                      r.expected == 1.0 && r.sigma == 0.25);
+  }
+
+  // Row 102 — estimate == expected: z is exactly 0 and the check passes.
+  {
+    const ZScore r = zscore(1.5, 1.5, 0.25);
+    b.add_boolean("stats.z.zero", r.z == 0.0 && r.pass);
+  }
+
+  // Row 103 — the boundary is non-strict: |diff| = 0.5 = 4 * 0.125 exactly,
+  // z exactly 4, PASS ([MCNX-RNG-07]: |estimate - expected| <= 4 sigma).
+  {
+    const ZScore r = zscore(1.5, 1.0, 0.125);
+    b.add_boolean("stats.z.boundary_pass", r.z == 4.0 && r.pass);
+  }
+
+  // Row 104 — one 2^-20 step beyond the boundary fails: diff = 0.5 + 2^-20,
+  // z > 4 strictly.
+  {
+    const ZScore r = zscore(1.5 + 0x1p-20, 1.0, 0.125);
+    b.add_boolean("stats.z.boundary_fail", !r.pass && r.z > 4.0);
+  }
+
+  // Row 105 — the pinned constants against their spec literals, including
+  // the N_p == 2^20 identity. The primary seed is judged against the
+  // normative decimal 1296518744 == 0x4D474E58; the spec's "(0x4D434E58)"
+  // gloss is arithmetically wrong (see the mcnux_stats.hxx header note).
+  b.add_boolean("stats.constants",
+                stats_default_num_packets == 1048576 &&
+                    stats_default_num_packets == (std::int64_t(1) << 20) &&
+                    stats_seed_primary == 1296518744 &&
+                    stats_seed_primary == 0x4D474E58 &&
+                    stats_seed_secondary == 20260730 &&
+                    stats_sigma_bound == 4.0);
+}
+
+// ---------------------------------------------------------------------------
 // The battery itself. Every check is a call into the shared headers; no
 // constant, fixture, or tolerance is restated here.
 // ---------------------------------------------------------------------------
@@ -1764,6 +1837,11 @@ void run_battery(Battery &b) {
   // the EOS-inversion error protocol of specs/opacity-eos-evaluation.md
   // [MCNX-OPA-06/07] through mcnux_table_range.hxx.
   append_table_range_rows(b);
+
+  // Rows 100..105 — the statistical-acceptance z-score reduction and pinned
+  // constants of specs/rng-and-statistical-acceptance.md [MCNX-RNG-07] and
+  // specs/verification-suite-design.md [MCNX-VER-07] through mcnux_stats.hxx.
+  append_stats_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.
