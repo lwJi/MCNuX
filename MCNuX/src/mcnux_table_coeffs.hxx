@@ -53,8 +53,10 @@
 //
 // Scope boundary (deliberate):
 //   * NO range policy: inputs are assumed in-range; the [MCNX-OPA-06]
-//     transparency floor / clamping / clamp counters are the T11 layer
-//     (mcnux_opacity.hxx AxisBounds is its hook surface, not this header).
+//     transparency floor / clamping / clamp counters are the
+//     mcnux_table_range.hxx layer (T11), whose RangedTableCoefficients
+//     wraps this callable (mcnux_opacity.hxx AxisBounds is the hook
+//     surface, not this header).
 //   * NO NES/Pair/Brem assembly (structured open question,
 //     opacity-eos-evaluation.md:340-349): the baseline is EmAb + Iso only,
 //     and tabulated nu_x emission is identically zero.

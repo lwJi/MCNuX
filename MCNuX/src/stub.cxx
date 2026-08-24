@@ -5,6 +5,7 @@
 #include "mcnux_rng.hxx"
 #include "mcnux_srcterms.hxx"
 #include "mcnux_table_coeffs.hxx"
+#include "mcnux_table_range.hxx"
 #include "mcnux_tetrad.hxx"
 #include "mcnux_trp.hxx"
 #include "mcnux_units.hxx"
@@ -40,6 +41,11 @@
 // and nu_x mapping of specs/opacity-eos-evaluation.md [MCNX-OPA-04/05]
 // (TableEval-contract conformance, trivially-copyable view bundle/functor,
 // nu_x has-no-slot special-case pin, lepton-number mu_nu sign map), and
+// mcnux_table_range.hxx for the table-range enforcement policy of
+// specs/opacity-eos-evaluation.md [MCNX-OPA-06/07] (RangedTableCoefficients
+// TableEval-contract conformance, trivially-copyable counters/functor — the
+// transparency floor, intersection clamping, clamp counters, and the
+// inversion-protocol predicate are runtime selftest rows), and
 // mcnux_geodesic.hxx for the flat-spacetime limit of the geodesic push of
 // specs/geodesic-propagation.md [MCNX-GEO-01/04] (dp_i/dt == 0 and |dx/dt|
 // == 1 exactly on the flat snapshot, one RK4 step an exact straight line
