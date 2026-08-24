@@ -61,6 +61,54 @@
 //                        total_rate}              [MCNX-TRP-02]
 //  68..69   trp.relabel.monotonicity_{ka, ks}     [MCNX-TRP-03]
 //  70       trp.relabel.alpha_one_identity        [MCNX-TRP-02] (alpha = 1)
+//  71       units.hc                              hc pin (opacity-eos-
+//                                                 evaluation.md:356-361)
+//  72..75   coef.analytic.{kappa_passthrough,
+//                          kirchhoff_identity,
+//                          eta_zero, nux_emission} [MCNX-VER-05]
+//  76..78   coef.dispatch.{analytic, table,
+//                          parameter}             [MCNX-VER-05] (source
+//                                                 switch invisible below the
+//                                                 coefficient interface)
+//  79..81   geo.gather.{linear_values,
+//                      linear_derivs,
+//                      constant_derivs_zero}      [MCNX-GEO-03]
+//  82       geo.rhs.null_closure_identity         [MCNX-GEO-02]
+//  83..84   geo.push.flat_{straight_line,
+//                         unit_speed}             [MCNX-GEO-04] (flat limit)
+//  85       geo.push.order_ge2                    [MCNX-GEO-04] (convergence)
+//  86..87   tblcoef.kirchhoff.{nue, nuebar}       [MCNX-OPA-04] (Kirchhoff
+//                                                 closure, synthetic tables)
+//  88..89   tblcoef.nux.{kappa_a_zero, eta_zero}  [MCNX-OPA-05] (exact)
+//  90       tblcoef.nux.kappa_s_halfmean          [MCNX-OPA-05]
+//  91       tblcoef.dispatch.table_plumb          [MCNX-OPA-04] (plugs into
+//                                                 the [MCNX-VER-05] dispatch)
+//  92..93   tblrange.floor.{zero_no_touch, nux}   [MCNX-OPA-06] (transparency
+//                                                 floor; NaN-poisoned table
+//                                                 data prove no table touch)
+//  94..96   tblrange.clamp.{equality, counters,
+//                           inrange_noop}         [MCNX-OPA-06] (component-
+//                                                 wise clamping + per-axis
+//                                                 counters, exact)
+//  97       tblrange.nonan                        [MCNX-OPA-06] (no-NaN
+//                                                 guarantee, hostile probe)
+//  98       tblrange.rho_min                      [MCNX-OPA-06] (floor
+//                                                 density = max of the
+//                                                 tabulated lower bounds)
+//  99       tblrange.inversion_protocol           [MCNX-OPA-07] (pinned
+//                                                 failing inversion input)
+// 100       stats.z.exact                         [MCNX-VER-07] (z closed
+//                                                 form, exact fixture)
+// 101       stats.z.sign                          [MCNX-VER-07] (negative z,
+//                                                 exact, in band)
+// 102       stats.z.zero                          [MCNX-VER-07] (estimate ==
+//                                                 expected -> z == 0, pass)
+// 103       stats.z.boundary_pass                 [MCNX-RNG-07] (z exactly 4
+//                                                 passes: non-strict <=)
+// 104       stats.z.boundary_fail                 [MCNX-RNG-07] (one 2^-20
+//                                                 step beyond 4 sigma fails)
+// 105       stats.constants                       [MCNX-RNG-07] (pinned N_p,
+//                                                 seeds, 4 sigma bound)
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -75,10 +123,15 @@
 //               digits, so agreement cannot be asserted at the machine tier
 //               (see the rtol_pinned comment in mcnux_units.hxx).
 
+#include "mcnux_coefficients.hxx"
+#include "mcnux_geodesic.hxx"
 #include "mcnux_opacity.hxx"
 #include "mcnux_particles.hxx"
 #include "mcnux_rng.hxx"
 #include "mcnux_srcterms.hxx"
+#include "mcnux_stats.hxx"
+#include "mcnux_table_coeffs.hxx"
+#include "mcnux_table_range.hxx"
 #include "mcnux_tetrad.hxx"
 #include "mcnux_trp.hxx"
 #include "mcnux_units.hxx"
@@ -88,8 +141,12 @@
 #include <cctk_Groups.h>
 #include <cctk_Parameters.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <vector>
 
 namespace MCNuX {
 
@@ -717,6 +774,922 @@ void append_trp_rows(Battery &b) {
 }
 
 // ---------------------------------------------------------------------------
+// Rows 71..78 — the analytic (gray) opacity mode and the source-agnostic
+// coefficient dispatch of specs/verification-suite-design.md [MCNX-VER-05]
+// (T12) through mcnux_coefficients.hxx, plus the hc pin those formulas rest
+// on (specs/opacity-eos-evaluation.md:356-361).
+//
+// The analytic rows sweep a synthetic AnalyticOpacityParams (exact binary
+// fractions, distinct per species, kappa_a0(NuX) > 0) over a literal (E, T)
+// grid spanning E/T from ~1e-2 to ~1e2: kappa pass-through is bitwise
+// (exact tier); the Kirchhoff identity eta/kappa_a = eta_scale * c * 4 pi
+// E^3/(hc)^3/(exp(E/T) + 1) is written out independently here and judged at
+// detail::rtol_machine (machine tier, verification-suite-design.md:320-321);
+// eta vanishes exactly when eta_scale = 0 or kappa_a0 = 0; and nu_x emission
+// is strictly positive (the nu_x coverage mechanism, :225-227). The dispatch
+// rows pin that evaluate_coefficients() returns the analytic triple bitwise
+// under Analytic and a synthetic table callable's triple bitwise under
+// Table — and that the two differ, so the switch is observable — and that
+// the parameter glue reads the parfile literals of unit-selftest.par back
+// bitwise (the parfile sets opacity_source = "analytic" and the three arrays
+// to the exact binary fractions restated below).
+// ---------------------------------------------------------------------------
+
+void append_coefficient_rows(Battery &b) {
+  // Row 71 — the hc pin, recomputed from h, c, e against the 10-digit
+  // anchor of specs/opacity-eos-evaluation.md:359-360.
+  b.add_pinned("units.hc", hc_MeV_cm, pinned::hc_MeV_cm);
+
+  const AnalyticOpacityParams ap = {
+      {0.5, 0.25, 0.125}, {0.0625, 0.03125, 0.015625}, {1.0, 0.5, 1.0}};
+  const Species species[NUM_SPECIES] = {Species::NuE, Species::NuEBar,
+                                        Species::NuX};
+  const double energies[] = {0.125, 1.0, 3.7, 12.5, 80.0};
+  const double temperatures[] = {0.5, 2.0, 11.0};
+  constexpr int nE = int(sizeof(energies) / sizeof(energies[0]));
+  constexpr int nT = int(sizeof(temperatures) / sizeof(temperatures[0]));
+
+  // Row 72 — kappa_a = kappa_a0(s), kappa_s = kappa_s0(s), bitwise over the
+  // whole sweep (energy- and temperature-independent).
+  bool pass_ok = true;
+  for (int is = 0; is < NUM_SPECIES; ++is)
+    for (int ie = 0; ie < nE; ++ie)
+      for (int it = 0; it < nT; ++it) {
+        const Coefficients c =
+            analytic_coefficients(ap, species[is], energies[ie],
+                                  temperatures[it]);
+        pass_ok = pass_ok && c.kappa_a == ap.kappa_a0[is] &&
+                  c.kappa_s == ap.kappa_s0[is];
+      }
+  b.add_boolean("coef.analytic.kappa_passthrough", pass_ok);
+
+  // Row 73 — the Kirchhoff identity, independently restated from
+  // verification-suite-design.md:216, machine tier wherever kappa_a0 > 0
+  // (every species of this fixture).
+  bool kirch_ok = true;
+  for (int is = 0; is < NUM_SPECIES; ++is)
+    for (int ie = 0; ie < nE; ++ie)
+      for (int it = 0; it < nT; ++it) {
+        const double E = energies[ie], T = temperatures[it];
+        const Coefficients c =
+            analytic_coefficients(ap, species[is], E, T);
+        const double want = ap.eta_scale[is] * c_cgs * 4.0 * detail::pi *
+                            E * E * E / (hc_MeV_cm * hc_MeV_cm * hc_MeV_cm) /
+                            (std::exp(E / T) + 1.0);
+        kirch_ok = kirch_ok && detail::approx_eq(c.eta / c.kappa_a, want,
+                                                 detail::rtol_machine);
+      }
+  b.add_boolean("coef.analytic.kirchhoff_identity", kirch_ok);
+
+  // Row 74 — eta = 0 exactly when eta_scale = 0 (absorption-only medium) and
+  // when kappa_a0 = 0 (no absorber, hence no Kirchhoff emitter).
+  AnalyticOpacityParams ap_noeta = ap;
+  AnalyticOpacityParams ap_noabs = ap;
+  for (int is = 0; is < NUM_SPECIES; ++is) {
+    ap_noeta.eta_scale[is] = 0.0;
+    ap_noabs.kappa_a0[is] = 0.0;
+  }
+  double eta_zero_err = 0.0;
+  for (int is = 0; is < NUM_SPECIES; ++is)
+    for (int ie = 0; ie < nE; ++ie)
+      for (int it = 0; it < nT; ++it) {
+        const double e1 = analytic_coefficients(ap_noeta, species[is],
+                                                energies[ie], temperatures[it])
+                              .eta;
+        const double e2 = analytic_coefficients(ap_noabs, species[is],
+                                                energies[ie], temperatures[it])
+                              .eta;
+        eta_zero_err += detail::cabs(e1) + detail::cabs(e2);
+      }
+  b.add_exact("coef.analytic.eta_zero", eta_zero_err, 0.0);
+
+  // Row 75 — nu_x emission is reachable: eta(NuX) > 0 with kappa_a0(NuX) > 0
+  // and eta_scale(NuX) = 1, at every (E, T) of the sweep (E > 0 throughout).
+  bool nux_ok = ap.kappa_a0[species_index(Species::NuX)] > 0.0 &&
+                ap.eta_scale[species_index(Species::NuX)] == 1.0;
+  for (int ie = 0; ie < nE; ++ie)
+    for (int it = 0; it < nT; ++it)
+      nux_ok = nux_ok && analytic_coefficients(ap, Species::NuX, energies[ie],
+                                               temperatures[it])
+                                 .eta > 0.0;
+  b.add_boolean("coef.analytic.nux_emission", nux_ok);
+
+  // Synthetic table-source callable with the dispatch contract
+  // (Species, double E_MeV, const FluidState&) -> Coefficients: a smooth
+  // function of all three inputs that cannot coincide with the analytic
+  // triple (its kappa_a carries the species index and rho).
+  const auto table = [](Species s, double E, const FluidState &st) {
+    const double k = 1.0 + species_index(s);
+    return Coefficients{k * 1e-3 * st.rho_cgs, k * 2e-4 * E * st.Ye,
+                        k * 7.0 * st.T_MeV * E};
+  };
+  const FluidState states[] = {
+      {1.0e10, 2.0, 0.25}, {3.0e12, 11.0, 0.375}, {5.0e14, 0.5, 0.1}};
+  constexpr int nS = int(sizeof(states) / sizeof(states[0]));
+
+  // Rows 76..77 — dispatch exactness: Analytic returns the analytic triple
+  // bitwise and differs from the table triple; Table returns the table
+  // triple bitwise. Both through the identical Coefficients type.
+  bool disp_an_ok = true, disp_tb_ok = true;
+  for (int is = 0; is < NUM_SPECIES; ++is)
+    for (int ie = 0; ie < nE; ++ie)
+      for (int ist = 0; ist < nS; ++ist) {
+        const Species s = species[is];
+        const double E = energies[ie];
+        const FluidState &st = states[ist];
+        const Coefficients an = analytic_coefficients(ap, s, E, st.T_MeV);
+        const Coefficients tb = table(s, E, st);
+        const Coefficients got_an = evaluate_coefficients(
+            CoefficientSource::Analytic, ap, table, s, E, st);
+        const Coefficients got_tb =
+            evaluate_coefficients(CoefficientSource::Table, ap, table, s, E, st);
+        disp_an_ok = disp_an_ok && got_an.kappa_a == an.kappa_a &&
+                     got_an.kappa_s == an.kappa_s && got_an.eta == an.eta &&
+                     (got_an.kappa_a != tb.kappa_a ||
+                      got_an.kappa_s != tb.kappa_s || got_an.eta != tb.eta);
+        disp_tb_ok = disp_tb_ok && got_tb.kappa_a == tb.kappa_a &&
+                     got_tb.kappa_s == tb.kappa_s && got_tb.eta == tb.eta;
+      }
+  b.add_boolean("coef.dispatch.analytic", disp_an_ok);
+  b.add_boolean("coef.dispatch.table", disp_tb_ok);
+
+  // Row 78 — the parameter glue: MCNuX/test/unit-selftest.par sets
+  // opacity_source = "analytic" and kappa_a0 = {0.5, 0.25, 0.125},
+  // kappa_s0 = {0.0625, 0.03125, 0.015625}, eta_scale = {1.0, 0.5, 1.0};
+  // the same literals as the fixture `ap` above. Bitwise read-back.
+  const AnalyticOpacityParams from_par = analytic_params_from_parameters();
+  bool par_ok = selected_coefficient_source() == CoefficientSource::Analytic;
+  for (int is = 0; is < NUM_SPECIES; ++is)
+    par_ok = par_ok && from_par.kappa_a0[is] == ap.kappa_a0[is] &&
+             from_par.kappa_s0[is] == ap.kappa_s0[is] &&
+             from_par.eta_scale[is] == ap.eta_scale[is];
+  b.add_boolean("coef.dispatch.parameter", par_ok);
+}
+
+// ---------------------------------------------------------------------------
+// Rows 79..85 — the geodesic push of specs/geodesic-propagation.md (T15)
+// through mcnux_geodesic.hxx: the vertex-centered trilinear gather
+// [MCNX-GEO-03] on synthetic in-memory vertex data (host buffers wrapped as
+// amrex::Array4 views over a small vertex box — the in-memory synthetic-table
+// discipline of the opacity rows; no grid, no driver), the null-closure
+// identity [MCNX-GEO-02] at every RK stage of a curved analytic metric, the
+// flat-spacetime exactness of [MCNX-GEO-04] (straight line to rtol_machine,
+// momentum bitwise constant, |dx/dt| = 1), and the convergence order of the
+// integrator on a smooth analytic metric (RK4 is used; the row asserts the
+// spec's order >= 2 bound, ratio >= 3.9 on step halving). Booleans only.
+// ---------------------------------------------------------------------------
+
+// Synthetic vertex box: 5 x 5 x 5 vertices (indices 0..4), anisotropic
+// spacing and an off-origin prob_lo so that index/coordinate mix-ups cannot
+// pass. Ten fields in ADMBaseX component order (metric 6, lapse 1, shift 3).
+struct SyntheticVertexData {
+  static constexpr int n = 5;
+  static constexpr double prob_lo[3] = {-1.0, -0.5, 0.25};
+  static constexpr double dx[3] = {0.25, 0.5, 0.125};
+  std::vector<double> metric, lapse, shift; // component-major buffers
+
+  SyntheticVertexData()
+      : metric(std::size_t(n) * n * n * 6), lapse(std::size_t(n) * n * n),
+        shift(std::size_t(n) * n * n * 3) {}
+
+  static std::size_t at(int i, int j, int k, int c) {
+    return std::size_t(i) + std::size_t(n) * (std::size_t(j) + std::size_t(n) * (std::size_t(k) + std::size_t(n) * c));
+  }
+
+  // Fill every field as the affine function a + b . (x, y, z) of the vertex
+  // coordinates (a, b per field from `coef`, ten rows of four).
+  void fill_affine(const double coef[10][4]) {
+    for (int k = 0; k < n; ++k)
+      for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) {
+          const double x = prob_lo[0] + i * dx[0];
+          const double y = prob_lo[1] + j * dx[1];
+          const double z = prob_lo[2] + k * dx[2];
+          for (int c = 0; c < 10; ++c) {
+            const double v = coef[c][0] + coef[c][1] * x + coef[c][2] * y +
+                             coef[c][3] * z;
+            if (c < 6)
+              metric[at(i, j, k, c)] = v;
+            else if (c == 6)
+              lapse[at(i, j, k, 0)] = v;
+            else
+              shift[at(i, j, k, c - 7)] = v;
+          }
+        }
+  }
+
+  VertexMetricGather gather() const {
+    const amrex::Dim3 lo{0, 0, 0}, hi{n, n, n}; // hi exclusive
+    VertexMetricGather g{};
+    g.metric = amrex::Array4<const amrex::Real>(metric.data(), lo, hi, 6);
+    g.lapse = amrex::Array4<const amrex::Real>(lapse.data(), lo, hi, 1);
+    g.shift = amrex::Array4<const amrex::Real>(shift.data(), lo, hi, 3);
+    for (int d = 0; d < 3; ++d) {
+      g.prob_lo[d] = prob_lo[d];
+      g.dx[d] = dx[d];
+    }
+    return g;
+  }
+};
+
+// A smooth curved analytic metric with exact derivatives (polynomial, SPD
+// and diagonally dominant on |x^i| <~ 1.5): the fixture for the closure
+// identity and convergence rows. Host-only test scaffolding.
+struct CurvedAnalyticMetric {
+  MetricSnapshot operator()(double x, double y, double z) const noexcept {
+    MetricSnapshot m{};
+    m.alpha = 1.0 + 0.2 * x + 0.1 * y * z;
+    m.dalpha[0] = 0.2;
+    m.dalpha[1] = 0.1 * z;
+    m.dalpha[2] = 0.1 * y;
+    m.beta[0] = 0.1 * y;
+    m.beta[1] = 0.05 * z;
+    m.beta[2] = 0.1 * x * y;
+    m.dbeta[1][0] = 0.1;      // d_y beta^x
+    m.dbeta[2][1] = 0.05;     // d_z beta^y
+    m.dbeta[0][2] = 0.1 * y;  // d_x beta^z
+    m.dbeta[1][2] = 0.1 * x;  // d_y beta^z
+    m.g = SpatialMetric{1.0 + 0.1 * x * x, 0.1 * z,  0.05 * y,
+                        1.0 + 0.2 * y * y, 0.1 * x,  1.0 + 0.1 * z * z};
+    m.dg[0] = SpatialMetric{0.2 * x, 0.0, 0.0, 0.0, 0.1, 0.0};
+    m.dg[1] = SpatialMetric{0.0, 0.0, 0.05, 0.4 * y, 0.0, 0.0};
+    m.dg[2] = SpatialMetric{0.0, 0.1, 0.0, 0.0, 0.0, 0.2 * z};
+    return m;
+  }
+};
+
+void append_geodesic_rows(Battery &b) {
+  // --- Rows 79..80: affine fields, values and derivatives at off-vertex
+  // points (machine tier). Distinct, exact-binary coefficients per field. ---
+  const double coef[10][4] = {
+      {1.25, 0.125, -0.0625, 0.03125},  // gxx
+      {0.0625, -0.03125, 0.125, 0.25},  // gxy
+      {-0.125, 0.25, 0.0625, -0.125},   // gxz
+      {1.5, -0.25, 0.125, 0.0625},      // gyy
+      {0.03125, 0.0625, -0.125, 0.25},  // gyz
+      {1.125, 0.0625, 0.25, -0.03125},  // gzz
+      {0.875, 0.25, -0.125, 0.0625},    // alp
+      {0.125, -0.0625, 0.25, 0.125},    // betax
+      {-0.25, 0.125, 0.0625, -0.25},    // betay
+      {0.0625, 0.03125, -0.25, 0.125},  // betaz
+  };
+  SyntheticVertexData data;
+  data.fill_affine(coef);
+  const VertexMetricGather gather = data.gather();
+
+  // Query points strictly inside the 4 x 4 x 4 cell box, at generic
+  // (non-binary) fractions of a cell, plus one exactly on a vertex.
+  const double queries[][3] = {{-0.63, 0.37, 0.41},
+                               {-0.07, 1.23, 0.66},
+                               {-0.9, -0.45, 0.27},
+                               {-0.5, 0.5, 0.5},
+                               {-0.26, 1.49, 0.74}};
+  bool values_ok = true, derivs_ok = true;
+  for (const auto &q : queries) {
+    const MetricSnapshot m = gather(q[0], q[1], q[2]);
+    double want[10], got[10], dgot[10][3];
+    for (int c = 0; c < 10; ++c)
+      want[c] = coef[c][0] + coef[c][1] * q[0] + coef[c][2] * q[1] +
+                coef[c][3] * q[2];
+    const double *const gv[6] = {&m.g.xx, &m.g.xy, &m.g.xz,
+                                 &m.g.yy, &m.g.yz, &m.g.zz};
+    for (int c = 0; c < 6; ++c) {
+      got[c] = *gv[c];
+      for (int d = 0; d < 3; ++d) {
+        const double *const dgv[6] = {&m.dg[d].xx, &m.dg[d].xy, &m.dg[d].xz,
+                                      &m.dg[d].yy, &m.dg[d].yz, &m.dg[d].zz};
+        dgot[c][d] = *dgv[c];
+      }
+    }
+    got[6] = m.alpha;
+    for (int d = 0; d < 3; ++d)
+      dgot[6][d] = m.dalpha[d];
+    for (int k = 0; k < 3; ++k) {
+      got[7 + k] = m.beta[k];
+      for (int d = 0; d < 3; ++d)
+        dgot[7 + k][d] = m.dbeta[d][k];
+    }
+    for (int c = 0; c < 10; ++c) {
+      values_ok =
+          values_ok && detail::approx_eq(got[c], want[c], detail::rtol_machine);
+      for (int d = 0; d < 3; ++d)
+        derivs_ok = derivs_ok && detail::approx_eq(dgot[c][d], coef[c][1 + d],
+                                                   detail::rtol_machine);
+    }
+  }
+  b.add_boolean("geo.gather.linear_values", values_ok);
+  b.add_boolean("geo.gather.linear_derivs", derivs_ok);
+
+  // --- Row 81: constant fields — derivatives identically zero and values
+  // reproduced bitwise (exact tier; the mechanism behind flat exactness). ---
+  double const_coef[10][4] = {};
+  for (int c = 0; c < 10; ++c)
+    const_coef[c][0] = coef[c][0];
+  SyntheticVertexData cdata;
+  cdata.fill_affine(const_coef);
+  const VertexMetricGather cgather = cdata.gather();
+  bool const_ok = true;
+  for (const auto &q : queries) {
+    const MetricSnapshot m = cgather(q[0], q[1], q[2]);
+    const double *const gv[6] = {&m.g.xx, &m.g.xy, &m.g.xz,
+                                 &m.g.yy, &m.g.yz, &m.g.zz};
+    for (int c = 0; c < 6; ++c)
+      const_ok = const_ok && *gv[c] == coef[c][0];
+    const_ok = const_ok && m.alpha == coef[6][0];
+    for (int k = 0; k < 3; ++k)
+      const_ok = const_ok && m.beta[k] == coef[7 + k][0];
+    for (int d = 0; d < 3; ++d) {
+      const_ok = const_ok && m.dalpha[d] == 0.0 && m.dg[d].xx == 0.0 &&
+                 m.dg[d].xy == 0.0 && m.dg[d].xz == 0.0 && m.dg[d].yy == 0.0 &&
+                 m.dg[d].yz == 0.0 && m.dg[d].zz == 0.0;
+      for (int k = 0; k < 3; ++k)
+        const_ok = const_ok && m.dbeta[d][k] == 0.0;
+    }
+  }
+  b.add_boolean("geo.gather.constant_derivs_zero", const_ok);
+
+  // --- Row 82: null-closure identity alpha^2 (p^t)^2 = gamma^{ij} p_i p_j
+  // at EVERY RHS evaluation (all four RK stages of every step) along a
+  // curved trajectory, machine tier. ---
+  {
+    const CurvedAnalyticMetric curved;
+    bool closure_ok = true;
+    int nstages = 0;
+    const auto observe = [&](const MetricSnapshot &m, const double *p,
+                             const GeodesicRhs &r) {
+      const InverseSpatialMetric gu = spatial_metric_inverse(m.g);
+      const double lhs = (m.alpha * r.pt) * (m.alpha * r.pt);
+      const double rhs = momentum_norm2(gu, p[0], p[1], p[2]);
+      closure_ok = closure_ok && detail::approx_eq(lhs, rhs, detail::rtol_machine);
+      ++nstages;
+    };
+    double x[3] = {0.1, -0.2, 0.15};
+    double p[3] = {0.6, 0.3, -0.4};
+    for (int step = 0; step < 8; ++step)
+      geodesic_step_with(curved, x, p, 0.125, detail::SqrtStd{}, observe);
+    b.add_boolean("geo.rhs.null_closure_identity", closure_ok && nstages == 32);
+  }
+
+  // --- Rows 83..84: flat spacetime. Straight line x(t) = x0 + t p/|p| to
+  // rtol_machine over the benchmark's four steps with p bitwise unchanged;
+  // |dx/dt| = 1 to rtol_machine for several momenta. ---
+  {
+    const detail::FlatGather flat;
+    const double x0[3] = {0.125, -0.25, 0.0625};
+    const double p0[3] = {0.5, -0.25, 0.125};
+    double x[3] = {x0[0], x0[1], x0[2]};
+    double p[3] = {p0[0], p0[1], p0[2]};
+    const double dt = 0.125;
+    const int nsteps = 4;
+    bool line_ok = true;
+    const double pnorm = std::sqrt(p0[0] * p0[0] + p0[1] * p0[1] + p0[2] * p0[2]);
+    for (int step = 1; step <= nsteps; ++step) {
+      geodesic_step(flat, x, p, dt);
+      const double t = step * dt;
+      for (int i = 0; i < 3; ++i)
+        line_ok = line_ok &&
+                  detail::approx_eq(x[i], x0[i] + t * p0[i] / pnorm,
+                                    detail::rtol_machine) &&
+                  p[i] == p0[i];
+    }
+    b.add_boolean("geo.push.flat_straight_line", line_ok);
+
+    const double momenta[][3] = {{1.0, 0.0, 0.0},     {0.0, -2.0, 0.0},
+                                 {0.0, 0.0, 0.25},    {0.5, -0.25, 0.125},
+                                 {-0.375, 0.75, 0.5}, {3.0, 4.0, 12.0}};
+    bool speed_ok = true;
+    for (const auto &pm : momenta) {
+      const GeodesicRhs r = geodesic_rhs(flat_metric_snapshot(), pm);
+      const double v2 = r.dxdt[0] * r.dxdt[0] + r.dxdt[1] * r.dxdt[1] +
+                        r.dxdt[2] * r.dxdt[2];
+      speed_ok = speed_ok && detail::approx_eq(std::sqrt(v2), 1.0, detail::rtol_machine) &&
+                 r.dpdt[0] == 0.0 && r.dpdt[1] == 0.0 && r.dpdt[2] == 0.0;
+    }
+    b.add_boolean("geo.push.flat_unit_speed", speed_ok);
+  }
+
+  // --- Row 85: convergence order >= 2 on the curved analytic metric:
+  // errors against a 32x finer reference at dt and dt/2 must shrink by at
+  // least 3.9 (RK4 gives ~16). ---
+  {
+    const CurvedAnalyticMetric curved;
+    const double x0[3] = {0.1, -0.2, 0.15};
+    const double p0[3] = {0.6, 0.3, -0.4};
+    const double T = 1.0;
+    const auto integrate = [&](int nsteps, double out[6]) {
+      double x[3] = {x0[0], x0[1], x0[2]};
+      double p[3] = {p0[0], p0[1], p0[2]};
+      for (int step = 0; step < nsteps; ++step)
+        geodesic_step(curved, x, p, T / nsteps);
+      for (int i = 0; i < 3; ++i) {
+        out[i] = x[i];
+        out[3 + i] = p[i];
+      }
+    };
+    double ref[6], coarse[6], fine[6];
+    integrate(128, ref);
+    integrate(4, coarse);
+    integrate(8, fine);
+    double e_coarse = 0.0, e_fine = 0.0;
+    for (int i = 0; i < 6; ++i) {
+      e_coarse = std::max(e_coarse, detail::cabs(coarse[i] - ref[i]));
+      e_fine = std::max(e_fine, detail::cabs(fine[i] - ref[i]));
+    }
+    const bool order_ok = e_fine > 0.0 && e_coarse / e_fine >= 3.9;
+    CCTK_VINFO("MCNuX selftest geo.push.order_ge2: error(dt) = %.3e, "
+               "error(dt/2) = %.3e, ratio = %.3f",
+               e_coarse, e_fine, e_fine > 0.0 ? e_coarse / e_fine : 0.0);
+    b.add_boolean("geo.push.order_ge2", order_ok);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rows 86..91 — the baseline table-source coefficient assembly and nu_x
+// mapping of specs/opacity-eos-evaluation.md [MCNX-OPA-04/05] (T10) through
+// the BaselineTableCoefficients callable of mcnux_table_coeffs.hxx.
+//
+// Fixture: synthetic in-memory tables only, the T9 pattern verbatim
+// (synth_tval generator, flat column-major arrays; already-log10'd axes for
+// EmAb/Iso, raw axes — Ts in KELVIN — for the EOS chemical-potential
+// sub-tables; NO HDF5, no file I/O). One EmAb dataset + offset per
+// electron-type slot, one Iso 5D dataset per slot plus the species-major
+// [nOpacities, nMoments] offsets array, and three EOS sub-tables sharing one
+// raw axis set (one per mu_e/mu_p/mu_n). The pinned query point reuses the
+// T9 in-range values (E = 10.5 MeV; rho = 3.3e11 g/cm^3, T = 2.3 MeV,
+// Ye = 0.31 — in range for both the EmAb/Iso grids and the EOS axes).
+//
+// Rows: the Kirchhoff closure eta = c kappa_a f_eq 4 pi E^3/(hc)^3 with
+// mu_nu = +-(mu_e + mu_p - mu_n) is independently restated here (mu's via
+// direct eos_evaluate calls, the analytic-leg idiom of row 73) and judged at
+// detail::rtol_machine for nu_e and nu_e_bar; the nu_x zeros are exact
+// (kappa_a = eta = 0 from tabulated physics, [MCNX-OPA-05]); the nu_x
+// half-mean equals 1/2 (iso_evaluate(nu_e) + iso_evaluate(nu_e_bar))
+// computed directly, machine tier; and evaluate_coefficients() under
+// CoefficientSource::Table returns the callable's triple bitwise for all
+// three species (the table source plugs into the T12 dispatch). No range
+// policy is exercised (T11) and no NES/Pair/Brem is assembled
+// (opacity-eos-evaluation.md:340-349).
+// ---------------------------------------------------------------------------
+
+void append_baseline_table_rows(Battery &b) {
+  using wli::Real;
+
+  // --- EmAb/Iso synthetic grids: already-log10'd E [MeV], rho [g/cm^3],
+  // T [KELVIN]; Ye raw (the T9 grids of rows 41..42). ---
+  constexpr int oE = 4, oD = 5, oT = 4, oY = 3, oMom = 2;
+  const Real LogEs[oE] = {-1.0, 0.5, 1.5, 2.0};
+  const Real LogDs[oD] = {6.0, 8.0, 10.0, 12.0, 14.0};
+  const Real LogTs[oT] = {9.5, 10.0, 10.7, 11.3};
+  const Real Ys2[oY] = {0.05, 0.25, 0.50};
+
+  // One EmAb dataset + scalar offset per electron-type slot (distinct
+  // generator phases so the two species cannot alias).
+  Real emab_nue[oE * oD * oT * oY], emab_nueb[oE * oD * oT * oY];
+  for (std::size_t k = 0; k < std::size_t(oE) * oD * oT * oY; ++k) {
+    emab_nue[k] = synth_tval(k);
+    emab_nueb[k] = synth_tval(k + 5);
+  }
+
+  // One Iso 5D dataset per slot; species-major [nOpacities, nMoments]
+  // offsets (selected only through iso_offset inside the callable).
+  Real iso_nue[oE * oMom * oD * oT * oY], iso_nueb[oE * oMom * oD * oT * oY];
+  for (std::size_t k = 0; k < std::size_t(oE) * oMom * oD * oT * oY; ++k) {
+    iso_nue[k] = synth_tval(k + 7);
+    iso_nueb[k] = synth_tval(k + 13);
+  }
+  const Real iso_offsets[num_tabulated_species * oMom] = {0.5, 1.0, 1.5, 2.0};
+
+  // --- EOS chemical-potential sub-tables: raw axes (rho, T [KELVIN — table
+  // native], Ye), the row-38 fixture axes; one (offset, dataset) per mu. ---
+  constexpr int nD = 4, nT = 5, nY = 3;
+  const Real Ds[nD] = {1.0e3, 5.0e5, 2.0e8, 6.0e11};
+  const Real Ts_K[nT] = {1.0e9, 3.0e9, 1.0e10, 5.0e10, 1.0e11};
+  const Real Ys[nY] = {0.05, 0.30, 0.55};
+  Real mu_e_tab[nD * nT * nY], mu_p_tab[nD * nT * nY], mu_n_tab[nD * nT * nY];
+  for (std::size_t k = 0; k < std::size_t(nD) * nT * nY; ++k) {
+    mu_e_tab[k] = synth_tval(k + 2);
+    mu_p_tab[k] = synth_tval(k + 17);
+    mu_n_tab[k] = synth_tval(k + 23);
+  }
+  const Real eos_OS[num_chemical_potentials] = {1.5, 2.5, 3.0};
+
+  // --- The view bundle + callable. ---
+  BaselineTableViews views{};
+  views.emab_LogEs = LogEs;
+  views.emab_nE = oE;
+  views.emab_LogDs = LogDs;
+  views.emab_nD = oD;
+  views.emab_LogTs = LogTs;
+  views.emab_nT = oT;
+  views.emab_Ys = Ys2;
+  views.emab_nY = oY;
+  views.emab_OS[emab_species_slot(Species::NuE)] = 1.25;
+  views.emab_OS[emab_species_slot(Species::NuEBar)] = 0.75;
+  views.emab_table[emab_species_slot(Species::NuE)] = emab_nue;
+  views.emab_table[emab_species_slot(Species::NuEBar)] = emab_nueb;
+  views.iso_LogEs = LogEs;
+  views.iso_nE = oE;
+  views.iso_LogDs = LogDs;
+  views.iso_nD = oD;
+  views.iso_LogTs = LogTs;
+  views.iso_nT = oT;
+  views.iso_Ys = Ys2;
+  views.iso_nY = oY;
+  views.iso_nMom = oMom;
+  views.iso_offsets = iso_offsets;
+  views.iso_table[iso_species_slot(Species::NuE)] = iso_nue;
+  views.iso_table[iso_species_slot(Species::NuEBar)] = iso_nueb;
+  views.eos_Ds = Ds;
+  views.eos_nD = nD;
+  views.eos_Ts_K = Ts_K;
+  views.eos_nT = nT;
+  views.eos_Ys = Ys;
+  views.eos_nY = nY;
+  for (int m = 0; m < num_chemical_potentials; ++m)
+    views.eos_OS[m] = eos_OS[m];
+  views.eos_table[chemical_potential_index(ChemicalPotential::Mu_e)] = mu_e_tab;
+  views.eos_table[chemical_potential_index(ChemicalPotential::Mu_p)] = mu_p_tab;
+  views.eos_table[chemical_potential_index(ChemicalPotential::Mu_n)] = mu_n_tab;
+  const BaselineTableCoefficients table{views};
+
+  // Pinned in-range query point (the T9 values of rows 38/41).
+  const double E_q = 10.5;
+  const FluidState st{3.3e11, 2.3, 0.31};
+
+  // Rows 86..87 — Kirchhoff closure, independently restated: mu's via three
+  // DIRECT eos_evaluate calls, f_eq and the 4 pi E^3/(hc)^3 normalization
+  // written out here, judged at detail::rtol_machine.
+  {
+    const double mu_e =
+        eos_evaluate(st.rho_cgs, st.T_MeV, st.Ye, Ds, nD, Ts_K, nT, Ys, nY,
+                     eos_OS[0], mu_e_tab);
+    const double mu_p =
+        eos_evaluate(st.rho_cgs, st.T_MeV, st.Ye, Ds, nD, Ts_K, nT, Ys, nY,
+                     eos_OS[1], mu_p_tab);
+    const double mu_n =
+        eos_evaluate(st.rho_cgs, st.T_MeV, st.Ye, Ds, nD, Ts_K, nT, Ys, nY,
+                     eos_OS[2], mu_n_tab);
+    const double mu_nu_nue = mu_e + mu_p - mu_n; // mu_nu(nu_e_bar) = -this
+    const struct {
+      const char *name;
+      Species s;
+      double mu;
+    } kirch[2] = {{"tblcoef.kirchhoff.nue", Species::NuE, mu_nu_nue},
+                  {"tblcoef.kirchhoff.nuebar", Species::NuEBar, -mu_nu_nue}};
+    for (const auto &kc : kirch) {
+      const Coefficients c = table(kc.s, E_q, st);
+      const double f_eq =
+          1.0 / (std::exp((E_q - kc.mu) / st.T_MeV) + 1.0);
+      const double want = c_cgs * c.kappa_a * f_eq * 4.0 * detail::pi * E_q *
+                          E_q * E_q /
+                          (hc_MeV_cm * hc_MeV_cm * hc_MeV_cm);
+      b.add_boolean(kc.name,
+                    c.kappa_a > 0.0 &&
+                        detail::approx_eq(c.eta, want, detail::rtol_machine));
+    }
+  }
+
+  // Rows 88..90 — the nu_x mapping: kappa_a and eta exactly zero (no table
+  // is touched for them), kappa_s the half-mean of the two directly-evaluated
+  // electron-type Iso values (machine tier, 1e-14 relative).
+  {
+    const Coefficients cx = table(Species::NuX, E_q, st);
+    b.add_exact("tblcoef.nux.kappa_a_zero", cx.kappa_a, 0.0);
+    b.add_exact("tblcoef.nux.eta_zero", cx.eta, 0.0);
+
+    const int s0 = iso_species_slot(Species::NuE);
+    const int s1 = iso_species_slot(Species::NuEBar);
+    const Real os0 = iso_offset(iso_offsets, num_tabulated_species, oMom, s0,
+                                iso_baseline_moment);
+    const Real os1 = iso_offset(iso_offsets, num_tabulated_species, oMom, s1,
+                                iso_baseline_moment);
+    const double ks0 =
+        iso_evaluate(E_q, st.rho_cgs, st.T_MeV, st.Ye, LogEs, oE, LogDs, oD,
+                     LogTs, oT, Ys2, oY, iso_baseline_moment, oMom, os0,
+                     iso_nue);
+    const double ks1 =
+        iso_evaluate(E_q, st.rho_cgs, st.T_MeV, st.Ye, LogEs, oE, LogDs, oD,
+                     LogTs, oT, Ys2, oY, iso_baseline_moment, oMom, os1,
+                     iso_nueb);
+    b.add_boolean("tblcoef.nux.kappa_s_halfmean",
+                  cx.kappa_s > 0.0 &&
+                      detail::approx_eq(cx.kappa_s, 0.5 * (ks0 + ks1),
+                                        detail::rtol_machine));
+  }
+
+  // Row 91 — dispatch plumb-through: evaluate_coefficients() under
+  // CoefficientSource::Table returns the callable's triple bitwise for all
+  // three species (the [MCNX-OPA-04] source plugs into the [MCNX-VER-05]
+  // dispatch). The analytic parameter set is irrelevant under Table.
+  {
+    const AnalyticOpacityParams ap_unused = {};
+    const Species species[NUM_SPECIES] = {Species::NuE, Species::NuEBar,
+                                          Species::NuX};
+    bool plumb_ok = true;
+    for (int is = 0; is < NUM_SPECIES; ++is) {
+      const Coefficients direct = table(species[is], E_q, st);
+      const Coefficients via = evaluate_coefficients(
+          CoefficientSource::Table, ap_unused, table, species[is], E_q, st);
+      plumb_ok = plumb_ok && via.kappa_a == direct.kappa_a &&
+                 via.kappa_s == direct.kappa_s && via.eta == direct.eta;
+    }
+    b.add_boolean("tblcoef.dispatch.table_plumb", plumb_ok);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rows 92..99 — the table-range enforcement policy of
+// specs/opacity-eos-evaluation.md [MCNX-OPA-06] and the EOS-inversion error
+// protocol [MCNX-OPA-07] (T11) through the RangedTableCoefficients wrapper
+// of mcnux_table_range.hxx.
+//
+// Fixture: the T10 synthetic view bundle (same axes and generator phases as
+// rows 86..91) built TWICE — once with real data for the clamp rows, once
+// with NaN-POISONED table data (axis arrays real) for the transparency-floor
+// rows, so any accidental table evaluation below the floor surfaces as NaN
+// and fails the row (this is how "no table evaluation occurs" is made
+// falsifiable, opacity-eos-evaluation.md:305-306). Fixture bounds: E in
+// [10^-1, 10^2] MeV, rho intersection [10^6, 6e11] g/cm^3 (EmAb/Iso floor
+// 10^6 dominates the EOS 1e3), T intersection [10^9.5 K, 1e11 K] in MeV,
+// Ye intersection [0.05, 0.50]. All rows exact/boolean tier. The inversion
+// row reuses the row-39 synthetic inversion fixture with a pinned FAILING
+// input (X above MaxX => error 2, T = 0).
+// ---------------------------------------------------------------------------
+
+void append_table_range_rows(Battery &b) {
+  using wli::Real;
+
+  // --- Axes (the T10 grids verbatim). ---
+  constexpr int oE = 4, oD = 5, oT = 4, oY = 3, oMom = 2;
+  const Real LogEs[oE] = {-1.0, 0.5, 1.5, 2.0};
+  const Real LogDs[oD] = {6.0, 8.0, 10.0, 12.0, 14.0};
+  const Real LogTs[oT] = {9.5, 10.0, 10.7, 11.3};
+  const Real Ys2[oY] = {0.05, 0.25, 0.50};
+  constexpr int nD = 4, nT = 5, nY = 3;
+  const Real Ds[nD] = {1.0e3, 5.0e5, 2.0e8, 6.0e11};
+  const Real Ts_K[nT] = {1.0e9, 3.0e9, 1.0e10, 5.0e10, 1.0e11};
+  const Real Ys[nY] = {0.05, 0.30, 0.55};
+
+  // --- Real and NaN-poisoned datasets (same shapes; the poisoned bundle
+  // shares the REAL axis arrays, so rho_min_cgs still works on it). ---
+  constexpr std::size_t n_emab = std::size_t(oE) * oD * oT * oY;
+  constexpr std::size_t n_iso = std::size_t(oE) * oMom * oD * oT * oY;
+  constexpr std::size_t n_eos = std::size_t(nD) * nT * nY;
+  static Real emab_nue[n_emab], emab_nueb[n_emab];
+  static Real iso_nue[n_iso], iso_nueb[n_iso];
+  static Real mu_e_tab[n_eos], mu_p_tab[n_eos], mu_n_tab[n_eos];
+  static Real emab_nan[n_emab], iso_nan[n_iso], eos_nan[n_eos];
+  const Real qnan = std::numeric_limits<Real>::quiet_NaN();
+  for (std::size_t k = 0; k < n_emab; ++k) {
+    emab_nue[k] = synth_tval(k);
+    emab_nueb[k] = synth_tval(k + 5);
+    emab_nan[k] = qnan;
+  }
+  for (std::size_t k = 0; k < n_iso; ++k) {
+    iso_nue[k] = synth_tval(k + 7);
+    iso_nueb[k] = synth_tval(k + 13);
+    iso_nan[k] = qnan;
+  }
+  for (std::size_t k = 0; k < n_eos; ++k) {
+    mu_e_tab[k] = synth_tval(k + 2);
+    mu_p_tab[k] = synth_tval(k + 17);
+    mu_n_tab[k] = synth_tval(k + 23);
+    eos_nan[k] = qnan;
+  }
+  const Real iso_offsets[num_tabulated_species * oMom] = {0.5, 1.0, 1.5, 2.0};
+  const Real eos_OS[num_chemical_potentials] = {1.5, 2.5, 3.0};
+
+  // View-bundle builder: axes fixed, datasets swappable.
+  const auto make_views = [&](Real const *ea0, Real const *ea1, Real const *is0,
+                              Real const *is1, Real const *me, Real const *mp,
+                              Real const *mn) {
+    BaselineTableViews v{};
+    v.emab_LogEs = LogEs;
+    v.emab_nE = oE;
+    v.emab_LogDs = LogDs;
+    v.emab_nD = oD;
+    v.emab_LogTs = LogTs;
+    v.emab_nT = oT;
+    v.emab_Ys = Ys2;
+    v.emab_nY = oY;
+    v.emab_OS[emab_species_slot(Species::NuE)] = 1.25;
+    v.emab_OS[emab_species_slot(Species::NuEBar)] = 0.75;
+    v.emab_table[emab_species_slot(Species::NuE)] = ea0;
+    v.emab_table[emab_species_slot(Species::NuEBar)] = ea1;
+    v.iso_LogEs = LogEs;
+    v.iso_nE = oE;
+    v.iso_LogDs = LogDs;
+    v.iso_nD = oD;
+    v.iso_LogTs = LogTs;
+    v.iso_nT = oT;
+    v.iso_Ys = Ys2;
+    v.iso_nY = oY;
+    v.iso_nMom = oMom;
+    v.iso_offsets = iso_offsets;
+    v.iso_table[iso_species_slot(Species::NuE)] = is0;
+    v.iso_table[iso_species_slot(Species::NuEBar)] = is1;
+    v.eos_Ds = Ds;
+    v.eos_nD = nD;
+    v.eos_Ts_K = Ts_K;
+    v.eos_nT = nT;
+    v.eos_Ys = Ys;
+    v.eos_nY = nY;
+    for (int m = 0; m < num_chemical_potentials; ++m)
+      v.eos_OS[m] = eos_OS[m];
+    v.eos_table[chemical_potential_index(ChemicalPotential::Mu_e)] = me;
+    v.eos_table[chemical_potential_index(ChemicalPotential::Mu_p)] = mp;
+    v.eos_table[chemical_potential_index(ChemicalPotential::Mu_n)] = mn;
+    return v;
+  };
+  const BaselineTableViews views = make_views(
+      emab_nue, emab_nueb, iso_nue, iso_nueb, mu_e_tab, mu_p_tab, mu_n_tab);
+  const BaselineTableViews views_poisoned = make_views(
+      emab_nan, emab_nan, iso_nan, iso_nan, eos_nan, eos_nan, eos_nan);
+  const BaselineTableCoefficients base{views};
+
+  // Pinned in-range probe (the T10 values) and the floor probe (below the
+  // 10^6 g/cm^3 EmAb/Iso density floor).
+  const double E_q = 10.5;
+  const FluidState st_in{3.3e11, 2.3, 0.31};
+  const FluidState st_floor{1.0e5, 2.3, 0.31};
+
+  // Rows 92..93 — transparency floor, exact zero with NO table touch: the
+  // poisoned bundle turns any accidental evaluation into NaN (which would
+  // fail the exact comparison). NuX proves the floor precedes the nu_x
+  // branch and its two unconditional Iso evaluations.
+  {
+    const RangedTableCoefficients ranged{
+        BaselineTableCoefficients{views_poisoned}, nullptr};
+    const Coefficients ce = ranged(Species::NuE, E_q, st_floor);
+    const Coefficients cx = ranged(Species::NuX, E_q, st_floor);
+    b.add_exact("tblrange.floor.zero_no_touch",
+                detail::cabs(ce.kappa_a) + detail::cabs(ce.kappa_s) +
+                    detail::cabs(ce.eta),
+                0.0);
+    b.add_exact("tblrange.floor.nux",
+                detail::cabs(cx.kappa_a) + detail::cabs(cx.kappa_s) +
+                    detail::cabs(cx.eta),
+                0.0);
+  }
+
+  // All-axes-out probe: E above max (250 > 100), rho above max
+  // (1e13 > 6e11), T below min (0.1 MeV < 10^9.5 K in MeV), Ye above max
+  // (0.9 > 0.50).
+  const double E_out = 250.0;
+  const FluidState st_out{1.0e13, 0.1, 0.9};
+
+  // Row 94 — clamp equality, bitwise (same code path): the ranged functor at
+  // the out-of-bounds probe equals the ranged functor at the hand-clamped
+  // coordinates, for an electron species and for nu_x. counters == nullptr
+  // exercises the nullable skip-counting leg.
+  {
+    const RangedTableCoefficients ranged{base, nullptr};
+    const FluidState st_cl{density_bounds_cgs(views).hi,
+                           temperature_bounds_mev(views).lo,
+                           ye_bounds(views).hi};
+    const double E_cl = energy_bounds_mev(views).hi;
+    const Coefficients g_e = ranged(Species::NuE, E_out, st_out);
+    const Coefficients w_e = ranged(Species::NuE, E_cl, st_cl);
+    const Coefficients g_x = ranged(Species::NuX, E_out, st_out);
+    const Coefficients w_x = ranged(Species::NuX, E_cl, st_cl);
+    b.add_boolean("tblrange.clamp.equality",
+                  g_e.kappa_a == w_e.kappa_a && g_e.kappa_s == w_e.kappa_s &&
+                      g_e.eta == w_e.eta && g_x.kappa_a == w_x.kappa_a &&
+                      g_x.kappa_s == w_x.kappa_s && g_x.eta == w_x.eta);
+  }
+
+  // Row 95 — per-axis counters: ONE evaluation at the all-axes-out probe
+  // increments each of the four counters exactly once.
+  {
+    ClampCounters cc;
+    const RangedTableCoefficients ranged{base, &cc};
+    (void)ranged(Species::NuE, E_out, st_out);
+    b.add_boolean("tblrange.clamp.counters",
+                  cc.E == 1 && cc.rho == 1 && cc.T == 1 && cc.Ye == 1);
+  }
+
+  // Row 96 — in-range no-op: at the pinned in-range probe the ranged result
+  // is bitwise the plain BaselineTableCoefficients result for all three
+  // species, and every counter stays 0.
+  {
+    ClampCounters cc;
+    const RangedTableCoefficients ranged{base, &cc};
+    const Species species[NUM_SPECIES] = {Species::NuE, Species::NuEBar,
+                                          Species::NuX};
+    bool ok = true;
+    for (int is = 0; is < NUM_SPECIES; ++is) {
+      const Coefficients got = ranged(species[is], E_q, st_in);
+      const Coefficients want = base(species[is], E_q, st_in);
+      ok = ok && got.kappa_a == want.kappa_a && got.kappa_s == want.kappa_s &&
+           got.eta == want.eta;
+    }
+    ok = ok && cc.E == 0 && cc.rho == 0 && cc.T == 0 && cc.Ye == 0;
+    b.add_boolean("tblrange.clamp.inrange_noop", ok);
+  }
+
+  // Row 97 — no-NaN guarantee: a hostile probe (E <= 0 and T <= 0, which
+  // unguarded would reach a log10; huge rho; Ye > 1) yields finite, non-NaN
+  // coefficients for an electron species and for nu_x ([MCNX-OPA-03]'s
+  // no-negative-into-log10 closed by the clamp).
+  {
+    const RangedTableCoefficients ranged{base, nullptr};
+    const FluidState st_bad{1.0e30, -2.0, 1.5};
+    const Coefficients ce = ranged(Species::NuE, -3.0, st_bad);
+    const Coefficients cx = ranged(Species::NuX, -3.0, st_bad);
+    b.add_boolean("tblrange.nonan",
+                  !std::isnan(ce.kappa_a) && !std::isnan(ce.kappa_s) &&
+                      !std::isnan(ce.eta) && !std::isnan(cx.kappa_a) &&
+                      !std::isnan(cx.kappa_s) && !std::isnan(cx.eta));
+  }
+
+  // Row 98 — the transparency-floor density is the max of the tabulated
+  // density lower bounds (EmAb/Iso 10^6 dominates the EOS 1e3), computed
+  // independently here; bitwise (same pow/fmax calls).
+  b.add_exact("tblrange.rho_min", rho_min_cgs(views),
+              std::fmax(std::pow(10.0, LogDs[0]), Ds[0]));
+
+  // Row 99 — [MCNX-OPA-07] inversion protocol on a pinned FAILING input:
+  // the row-39 synthetic inversion fixture with X = 5.0 above MaxX = 1.0
+  // => error != 0 (code 2), returned T_MeV == 0 exactly (not a
+  // temperature), and inversion_usable rejects it.
+  {
+    Real inv_table[nD * nT * nY];
+    for (int iY = 0; iY < nY; ++iY)
+      for (int iT = 0; iT < nT; ++iT)
+        for (int iD = 0; iD < nD; ++iD)
+          inv_table[iD + nD * (iT + nT * iY)] =
+              0.08 * iT + 0.01 * iD + 0.005 * iY;
+    const Real OS_inv = 2.0;
+    const wli::EosInversionBounds bounds{1.0e3, 6.0e11, -1.0, 1.0,
+                                         0.05,  0.55,   true};
+    const EosInversionResultMeV r =
+        eos_invert_dey_noguess(7.3e6, 5.0, 0.22, Ds, nD, Ts_K, nT, Ys, nY,
+                               OS_inv, inv_table, bounds);
+    b.add_boolean("tblrange.inversion_protocol",
+                  r.error != 0 && r.T_MeV == 0.0 && !inversion_usable(r));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rows 100..105 — the statistical-acceptance machinery of
+// specs/rng-and-statistical-acceptance.md [MCNX-RNG-07] and
+// specs/verification-suite-design.md [MCNX-VER-07] (T26) through
+// mcnux_stats.hxx. All rows are exact tier on exact binary-fraction fixtures
+// (halves/quarters/2^-20 steps), so every equality is bitwise: the z closed
+// form and its sign, the z = 0 degenerate agreement point, the NON-STRICT
+// 4 sigma boundary (z exactly 4 passes; one 2^-20 step beyond fails), and
+// the pinned constants (N_p = 2^20, primary seed 0x4D434E58, secondary seed,
+// the 4 sigma bound). Sigma is a caller input throughout — no sigma formula
+// is exercised or owned here (sigma ownership is per-benchmark,
+// verification-suite-design.md:453-454).
+// ---------------------------------------------------------------------------
+
+void append_stats_rows(Battery &b) {
+  // Row 100 — z closed form, exact: (2.5 - 1.0)/0.5 == 3.0 bitwise.
+  b.add_exact("stats.z.exact", zscore(2.5, 1.0, 0.5).z, 3.0);
+
+  // Row 101 — z carries the sign of estimate - expected and the four-field
+  // shape echoes its inputs: (0.25 - 1.0)/0.25 == -3.0 exactly, in band.
+  {
+    const ZScore r = zscore(0.25, 1.0, 0.25);
+    b.add_boolean("stats.z.sign", r.z == -3.0 && r.pass && r.estimate == 0.25 &&
+                                      r.expected == 1.0 && r.sigma == 0.25);
+  }
+
+  // Row 102 — estimate == expected: z is exactly 0 and the check passes.
+  {
+    const ZScore r = zscore(1.5, 1.5, 0.25);
+    b.add_boolean("stats.z.zero", r.z == 0.0 && r.pass);
+  }
+
+  // Row 103 — the boundary is non-strict: |diff| = 0.5 = 4 * 0.125 exactly,
+  // z exactly 4, PASS ([MCNX-RNG-07]: |estimate - expected| <= 4 sigma).
+  {
+    const ZScore r = zscore(1.5, 1.0, 0.125);
+    b.add_boolean("stats.z.boundary_pass", r.z == 4.0 && r.pass);
+  }
+
+  // Row 104 — one 2^-20 step beyond the boundary fails: diff = 0.5 + 2^-20,
+  // z > 4 strictly.
+  {
+    const ZScore r = zscore(1.5 + 0x1p-20, 1.0, 0.125);
+    b.add_boolean("stats.z.boundary_fail", !r.pass && r.z > 4.0);
+  }
+
+  // Row 105 — the pinned constants against their spec literals, including
+  // the N_p == 2^20 identity. The primary seed is judged against the
+  // normative decimal 1296518744 == 0x4D474E58; the spec's "(0x4D434E58)"
+  // gloss is arithmetically wrong (see the mcnux_stats.hxx header note).
+  b.add_boolean("stats.constants",
+                stats_default_num_packets == 1048576 &&
+                    stats_default_num_packets == (std::int64_t(1) << 20) &&
+                    stats_seed_primary == 1296518744 &&
+                    stats_seed_primary == 0x4D474E58 &&
+                    stats_seed_secondary == 20260730 &&
+                    stats_sigma_bound == 4.0);
+}
+
+// ---------------------------------------------------------------------------
 // The battery itself. Every check is a call into the shared headers; no
 // constant, fixture, or tolerance is restated here.
 // ---------------------------------------------------------------------------
@@ -840,6 +1813,35 @@ void run_battery(Battery &b) {
   // tripwire, and alpha = 1 identity of specs/trapped-regime-treatment.md
   // [MCNX-TRP-02/03] through the mcnux_trp.hxx pure map.
   append_trp_rows(b);
+
+  // Rows 71..78 — the hc pin, the analytic (gray) opacity mode, and the
+  // source-agnostic coefficient dispatch of
+  // specs/verification-suite-design.md [MCNX-VER-05] through
+  // mcnux_coefficients.hxx and its parameter glue.
+  append_coefficient_rows(b);
+
+  // Rows 79..85 — the geodesic gather/RHS/integrator legs of
+  // specs/geodesic-propagation.md [MCNX-GEO-02/03/04] through
+  // mcnux_geodesic.hxx on synthetic vertex data and analytic metrics.
+  append_geodesic_rows(b);
+
+  // Rows 86..91 — the baseline table-source coefficient assembly (Kirchhoff
+  // closure) and nu_x mapping of specs/opacity-eos-evaluation.md
+  // [MCNX-OPA-04/05] through the mcnux_table_coeffs.hxx callable on
+  // synthetic in-memory tables, plus its plumb-through of the [MCNX-VER-05]
+  // dispatch.
+  append_baseline_table_rows(b);
+
+  // Rows 92..99 — the table-range enforcement policy (transparency floor,
+  // intersection clamping, per-axis clamp counters, no-NaN guarantee) and
+  // the EOS-inversion error protocol of specs/opacity-eos-evaluation.md
+  // [MCNX-OPA-06/07] through mcnux_table_range.hxx.
+  append_table_range_rows(b);
+
+  // Rows 100..105 — the statistical-acceptance z-score reduction and pinned
+  // constants of specs/rng-and-statistical-acceptance.md [MCNX-RNG-07] and
+  // specs/verification-suite-design.md [MCNX-VER-07] through mcnux_stats.hxx.
+  append_stats_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.

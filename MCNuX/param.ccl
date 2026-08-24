@@ -28,6 +28,63 @@ BOOLEAN test_synthetic_deposit "Deposit a synthetic, iteration-scaled event list
 {
 } "no"
 
+# Synthetic packet fixture switch of specs/geodesic-propagation.md
+# (Verification: flat-spacetime exactness; the `minkowski-freestream`
+# benchmark, and T16's Schwarzschild legs): MCNuX::test_synthetic_packets =
+# yes seeds a fixed, deterministic set of packets at initial time
+# (MCNuX_SeedSyntheticPackets), schedules the geodesic push over them in
+# every transport step, and mirrors their state into the
+# MCNuX::mcnux_packet_diag table for golden output. Off by default — the
+# fixture is verification scaffolding, not physics — and STEERABLE=NEVER,
+# because the table's storage and the routines' scheduling are decided from
+# it at startup.
+
+BOOLEAN test_synthetic_packets "Seed the deterministic synthetic packet fixture and push it along geodesics each transport step" STEERABLE=NEVER
+{
+} "no"
+
+# Transport-coefficient source of specs/opacity-eos-evaluation.md:118-124 and
+# specs/verification-suite-design.md [MCNX-VER-05]: the production weaklib
+# tables or the analytic (gray) Kirchhoff-form mode, both feeding the
+# identical per-species coefficient interface (kappa_a, kappa_s, eta; g = 1)
+# of src/mcnux_coefficients.hxx, so the switch is invisible below it. The
+# analytic mode is a first-class physics capability (constant-opacity
+# benchmarks, the nu_x coverage mechanism, the trapped-regime harness), not
+# test scaffolding. STEERABLE=NEVER: consumers capture the source and its
+# parameters once at startup.
+
+KEYWORD opacity_source "Transport-coefficient source (specs/opacity-eos-evaluation.md:118-124, [MCNX-VER-05])" STEERABLE=NEVER
+{
+  "table"    :: "production weaklib tables"
+  "analytic" :: "per-species gray Kirchhoff-form coefficients"
+} "table"
+
+# Analytic-mode coefficients, per species, indexed in the binding species
+# order of specs/conventions-and-units.md:110-114: [0] = nu_e, [1] = nu_e_bar,
+# [2] = nu_x (lumped heavy-lepton species). Formulas
+# (specs/verification-suite-design.md:213-217, E and T in MeV):
+#   kappa_a(s, E) = kappa_a0(s)
+#   kappa_s(s, E) = kappa_s0(s)
+#   eta(s, E)     = eta_scale(s) * c * kappa_a0(s) * 4 pi E^3/(hc)^3
+#                   * 1/(exp(E/T) + 1)
+# Non-negativity is enforced by the parameter ranges at parse time. Ignored
+# unless opacity_source = "analytic".
+
+CCTK_REAL kappa_a0[3] "Analytic-mode absorption opacity kappa_a0 per species [cm^-1]" STEERABLE=NEVER
+{
+  0:* :: "non-negative"
+} 0.0
+
+CCTK_REAL kappa_s0[3] "Analytic-mode scattering opacity kappa_s0 per species [cm^-1]" STEERABLE=NEVER
+{
+  0:* :: "non-negative"
+} 0.0
+
+CCTK_REAL eta_scale[3] "Analytic-mode emissivity scale eta_scale per species [dimensionless]: 1 = exact Kirchhoff equilibrium at mu_nu = 0, 0 = absorption-only medium" STEERABLE=NEVER
+{
+  0:* :: "non-negative"
+} 1.0
+
 # Single-rate pin of specs/carpetx-thorn-integration.md [MCNX-CTX-06]: MCNuX
 # reads the driver's subcycling switch so that MCNuX_ParamCheck can abort a
 # run configured with CarpetX::use_subcycling = yes. The CarpetX driver thorn

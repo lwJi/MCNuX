@@ -111,6 +111,46 @@ SCHEDULE MCNuX_ZeroSourceTerms IN MCNuX_TransportStep
   WRITES: MCNuX::lepton_source(everywhere)
 } "Set the MCNuX source-term variables to zero"
 
+# Geodesic push of specs/geodesic-propagation.md over the synthetic packet
+# fixture (verification scaffolding, parameter-gated; the production packet
+# population arrives with the emission task). The seed routine runs once AT
+# initial, after ODESolvers_Initial has produced the ADMBaseX initial data it
+# reads for the p_t column of the diagnostic table; the push runs inside the
+# transport group between the zero point and the contributors, once per
+# coarsest-level Delta t ([MCNX-CTX-05]). Level mode per [MCNX-CTX-03]: the
+# driver invokes the routine exactly once per traversal and it walks all
+# patches, levels, and particle tiles itself (global mode for the seed, which
+# also touches no per-level data beyond the metric reads). The READS: on the
+# ADMBaseX groups and the READS:/WRITES: on the diagnostic table are the
+# complete grid-variable footprint ([MCNX-CTX-04]); the packet container
+# itself is not a grid variable.
+
+if (test_synthetic_packets)
+{
+  STORAGE: mcnux_packet_diag
+
+  SCHEDULE MCNuX_SeedSyntheticPackets AT initial AFTER ODESolvers_Initial
+  {
+    LANG: C
+    OPTIONS: global
+    READS: ADMBaseX::metric(everywhere)
+    READS: ADMBaseX::lapse(everywhere)
+    READS: ADMBaseX::shift(everywhere)
+    WRITES: MCNuX::mcnux_packet_diag(everywhere)
+  } "Seed the deterministic synthetic packet fixture"
+
+  SCHEDULE MCNuX_GeodesicPush IN MCNuX_TransportStep AFTER MCNuX_ZeroSourceTerms BEFORE MCNuX_AddToSourceTerms
+  {
+    LANG: C
+    OPTIONS: level
+    READS: ADMBaseX::metric(everywhere)
+    READS: ADMBaseX::lapse(everywhere)
+    READS: ADMBaseX::shift(everywhere)
+    READS: MCNuX::mcnux_packet_diag(everywhere)
+    WRITES: MCNuX::mcnux_packet_diag(everywhere)
+  } "Push every packet along its null geodesic over one transport step"
+}
+
 # The named, empty-by-default extension group (the TmunuBaseX_AddToTmunu
 # analogue): every deposition routine is a contributor scheduled in here — a
 # self-accumulating READS: + WRITES: pair on the source variables, performing

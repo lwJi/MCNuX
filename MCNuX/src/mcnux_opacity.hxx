@@ -408,11 +408,12 @@ static_assert(brem_alpha(0) == wli::Real(1) && brem_alpha(1) == wli::Real(1) &&
               "Brem recovered-value weights must be Alpha = [1, 1, 28/3]");
 
 // ---------------------------------------------------------------------------
-// Table-range awareness hooks  (minimal surface for T11 — NOT [MCNX-OPA-06])
+// Table-range awareness hooks  (bounds surface only — NOT [MCNX-OPA-06])
 // ---------------------------------------------------------------------------
-// Only the bounds-reading surface the T11 range-policy layer builds on: no
+// Only the bounds-reading surface the range-policy layer builds on: no
 // clamping, no transparency floor, no clamp counters, no NaN guards live
-// here. Axis nodes are strictly ascending, so the endpoints ARE the bounds.
+// here — those are mcnux_table_range.hxx ([MCNX-OPA-06], T11). Axis nodes
+// are strictly ascending, so the endpoints ARE the bounds.
 
 struct AxisBounds {
   wli::Real lo, hi;

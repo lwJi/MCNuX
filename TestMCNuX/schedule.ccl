@@ -1,1 +1,52 @@
 # Schedule definitions for thorn TestMCNuX
+
+# specs/verification-suite-design.md [MCNX-VER-02/03]: the Schwarzschild
+# writers hook the ADMBaseX initial-data schedule groups, mirroring the shape
+# of ADMBaseX's own keyword-conditional blocks (CarpetX/ADMBaseX/schedule.ccl).
+# Those groups exist only when ODESolvers is active (they are scheduled
+# IN ODESolvers_Initial), so every parfile selecting "Schwarzschild" must
+# activate ODESolvers. Gauge-after-data ordering is guaranteed by ADMBaseX
+# itself (ADMBaseX_InitialGauge AFTER ADMBaseX_InitialData). Unlike ADMBaseX,
+# HydroBaseX also schedules HydroBaseX_InitialData AT initial when ODESolvers
+# is inactive (CarpetX/HydroBaseX/schedule.ccl), so the hydro writers below do
+# not by themselves require ODESolvers.
+
+if (CCTK_EQUALS(initial_data, "Schwarzschild")) {
+  SCHEDULE TestMCNuX_Schwarzschild_InitialData IN ADMBaseX_InitialData
+  {
+    LANG: C
+    WRITES: ADMBaseX::metric(everywhere) ADMBaseX::curv(everywhere)
+  } "Set up isotropic Schwarzschild metric and extrinsic curvature"
+}
+
+if (CCTK_EQUALS(initial_lapse, "Schwarzschild")) {
+  SCHEDULE TestMCNuX_Schwarzschild_InitialLapse IN ADMBaseX_InitialGauge
+  {
+    LANG: C
+    WRITES: ADMBaseX::lapse(everywhere)
+  } "Set isotropic Schwarzschild lapse"
+}
+
+# [MCNX-VER-04]: one writer covers both hydro profiles (the box is the
+# sphere's everywhere-inside branch). The WRITES list is the complete
+# 11-variable HydroBaseX set, copied from the vacuum-writer precedent
+# (CarpetX/HydroBaseX/schedule.ccl) -- an under-declared list trips the
+# driver's poison/validity checks ([MCNX-CTX-04]).
+if (CCTK_EQUALS(initial_hydro, "uniform sphere") ||
+    CCTK_EQUALS(initial_hydro, "equilibration box")) {
+  SCHEDULE TestMCNuX_HydroProfiles IN HydroBaseX_InitialData
+  {
+    LANG: C
+    WRITES: HydroBaseX::rho(everywhere)
+    WRITES: HydroBaseX::vel(everywhere)
+    WRITES: HydroBaseX::eps(everywhere)
+    WRITES: HydroBaseX::press(everywhere)
+    WRITES: HydroBaseX::temperature(everywhere)
+    WRITES: HydroBaseX::entropy(everywhere)
+    WRITES: HydroBaseX::Ye(everywhere)
+    WRITES: HydroBaseX::Bvec(everywhere)
+    WRITES: HydroBaseX::Avecx(everywhere)
+    WRITES: HydroBaseX::Avecy(everywhere)
+    WRITES: HydroBaseX::Avecz(everywhere)
+  } "Set up analytic (rho, T, Ye) hydro test profile, fluid at rest"
+}

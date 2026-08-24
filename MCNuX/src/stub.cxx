@@ -1,7 +1,12 @@
+#include "mcnux_coefficients.hxx"
+#include "mcnux_geodesic.hxx"
 #include "mcnux_opacity.hxx"
 #include "mcnux_particles.hxx"
 #include "mcnux_rng.hxx"
 #include "mcnux_srcterms.hxx"
+#include "mcnux_stats.hxx"
+#include "mcnux_table_coeffs.hxx"
+#include "mcnux_table_range.hxx"
 #include "mcnux_tetrad.hxx"
 #include "mcnux_trp.hxx"
 #include "mcnux_units.hxx"
@@ -28,7 +33,29 @@
 // mcnux_trp.hxx for the trapped-regime opacity-relabeling pure map of
 // specs/trapped-regime-treatment.md [MCNX-TRP-02/03] (the two exact
 // invariants, the 2021-convention monotonicity tripwire, the alpha = 1
-// identity endpoint).
+// identity endpoint), and mcnux_coefficients.hxx for the source-agnostic
+// coefficient interface and its analytic (gray) source of
+// specs/verification-suite-design.md [MCNX-VER-05] (exact kappa_a/kappa_s
+// pass-through, source-enumerator distinctness, device-capturable parameter
+// layout; the hc pin itself is asserted in mcnux_units.hxx), and
+// mcnux_table_coeffs.hxx for the baseline table-source coefficient assembly
+// and nu_x mapping of specs/opacity-eos-evaluation.md [MCNX-OPA-04/05]
+// (TableEval-contract conformance, trivially-copyable view bundle/functor,
+// nu_x has-no-slot special-case pin, lepton-number mu_nu sign map), and
+// mcnux_table_range.hxx for the table-range enforcement policy of
+// specs/opacity-eos-evaluation.md [MCNX-OPA-06/07] (RangedTableCoefficients
+// TableEval-contract conformance, trivially-copyable counters/functor — the
+// transparency floor, intersection clamping, clamp counters, and the
+// inversion-protocol predicate are runtime selftest rows), and
+// mcnux_geodesic.hxx for the flat-spacetime limit of the geodesic push of
+// specs/geodesic-propagation.md [MCNX-GEO-01/04] (dp_i/dt == 0 and |dx/dt|
+// == 1 exactly on the flat snapshot, one RK4 step an exact straight line
+// with bitwise-constant momentum, trivially-copyable gather functor), and
+// mcnux_stats.hxx for the statistical-acceptance machinery of
+// specs/rng-and-statistical-acceptance.md [MCNX-RNG-07] and
+// specs/verification-suite-design.md [MCNX-VER-07] (the pinned packet count
+// and seeds, the exact z closed form, the non-strict 4 sigma boundary, and
+// the trivially-copyable four-field ZScore shape).
 
 // Precision gate of specs/build-and-integration.md [MCNX-BLD-03]: all reals
 // are IEEE-754 binary64. The AMReX legs of the gate —

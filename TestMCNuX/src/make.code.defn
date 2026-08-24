@@ -1,5 +1,5 @@
 # Main make.code.defn file for thorn TestMCNuX
 
-SRCS =
+SRCS = schwarzschild.cxx hydro_profiles.cxx
 
 SUBDIRS =

@@ -22,9 +22,13 @@
 # The background is flat and no packets exist; the run is fully deterministic
 # (no RNG draw happens anywhere).
 
+# ADMBaseX is required by every MCNuX run since MCNuX INHERITS: ADMBaseX
+# (read access to the spacetime interface for the geodesic push); nothing
+# here reads the metric, so no ODESolvers/initial data is needed.
 ActiveThorns = "
     CarpetX
     IOUtil
+    ADMBaseX
     MCNuX
 "
 
