@@ -119,6 +119,81 @@
 //                                                 step beyond 4 sigma fails)
 // 105       stats.constants                       [MCNX-RNG-07] (pinned N_p,
 //                                                 seeds, 4 sigma bound)
+// 106       int.draw.closed_form                  [MCNX-INT-01] (draw law vs
+//                                                 independently composed
+//                                                 closed forms, machine)
+// 107       int.draw.u_zero_exact                 [MCNX-INT-01] (u = 0,
+//                                                 kappa > 0 -> Dt == 0,
+//                                                 exact)
+// 108       int.draw.zero_opacity_no_nan          [MCNX-INT-02] (kappa = 0 ->
+//                                                 +inf sentinel, never NaN,
+//                                                 incl. the u = 0 0/0 path)
+// 109       int.compete.tie_scatter               [MCNX-INT-02] (bitwise ties
+//                                                 Dt_s == Dt_a resolve to
+//                                                 scattering, exact)
+// 110       int.compete.ordering                  [MCNX-INT-02] (event vs
+//                                                 cell-exit vs step-end
+//                                                 sweep, strict precedence,
+//                                                 +inf sentinels)
+// 111       int.nu.flat_identity                  [MCNX-INT-01] (nu = -p_mu
+//                                                 u^mu ADM shortcut, flat
+//                                                 static + boosted, vs
+//                                                 metric_dot route)
+// 112       int.nu.curved_identity                [MCNX-INT-01] (same, pinned
+//                                                 curved fixture, machine)
+// 113       int.rng.episode_draw_map              [MCNX-INT-06] (k-order /
+//                                                 e-increment two-episode
+//                                                 script vs direct
+//                                                 u(S, q, e, k), exact)
+// 114       fluid.gather.constant_exact           [MCNX-INT-05] (ccc one-cell
+//                                                 gather, constant synthetic
+//                                                 fields, bitwise)
+// 115       fluid.gather.cell_value_no_interp     [MCNX-INT-05] (affine ccc
+//                                                 fields: off-center queries
+//                                                 return the stored cell
+//                                                 value bitwise — proves no
+//                                                 sub-cell interpolation)
+// 116       fluid.u.static_lift_exact             (v = 0 Valencia lift gives
+//                                                 u = (1/alpha, -beta^i/alpha)
+//                                                 exactly, nontrivial
+//                                                 alpha/beta)
+// 117       fluid.u.normalization                 (nonzero-v lift on a
+//                                                 non-flat gamma_ij:
+//                                                 g_munu u^mu u^nu = -1 and
+//                                                 alpha u^t = W, machine)
+// 118       emission.count.floor_bernoulli        [MCNX-PKT-02] (floor(N_p)
+//                                                 plus one iff u < frac,
+//                                                 strict <, both branches +
+//                                                 u = 0 and integer edges,
+//                                                 exact)
+// 119       emission.count.g4_single_entry        [MCNX-PKT-02] (g = (1,1,4)
+//                                                 at its single point of
+//                                                 entry: nu_x = 4x nu_e,
+//                                                 nu_e_bar == nu_e, exact)
+// 120       emission.init.bin_center              [MCNX-PKT-03] (nu =
+//                                                 0.5 (E_lo + E_hi), exact)
+// 121       emission.init.weight                  [MCNX-PKT-03] (N = E_p/nu,
+//                                                 exact binary fixture)
+// 122       emission.eta.bin_integral             [MCNX-OPA-04] (eta_b =
+//                                                 eta(s, E_b) * dE_b bridge,
+//                                                 exact)
+// 123       emission.key.bit_exact                [MCNX-PKT-05] (K_cell vs
+//                                                 hand-computed uint64
+//                                                 literal, bitwise)
+// 124       emission.key.flag_bit                 [MCNX-PKT-05]/[MCNX-GPU-04]
+//                                                 (bit 63 set on every
+//                                                 packable key)
+// 125       emission.key.capacity                 [MCNX-PKT-05] (capacity
+//                                                 predicate: corners accept,
+//                                                 each overflow/negative
+//                                                 rejects)
+// 126       emission.rng.creation_draw_map        [MCNX-PKT-05] (k = 0..5
+//                                                 order at e = 0 vs direct
+//                                                 u(S, q, 0, k), bitwise)
+// 127       emission.rng.cell_count_draw          [MCNX-PKT-05] (count draw
+//                                                 q = K_cell, e = n,
+//                                                 k = 3b + s vs direct u,
+//                                                 bitwise)
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -204,6 +279,24 @@ void run_battery(Battery &b) {
   // constants of specs/rng-and-statistical-acceptance.md [MCNX-RNG-07] and
   // specs/verification-suite-design.md [MCNX-VER-07] through mcnux_stats.hxx.
   append_stats_rows(b);
+
+  // Rows 106..113 — the interaction-time draw law, episode competition, and
+  // RNG draw map of specs/neutrino-matter-interactions.md
+  // [MCNX-INT-01/02/06] through the mcnux_interactions.hxx pure functions on
+  // pinned deterministic fixtures.
+  append_interaction_rows(b);
+
+  // Rows 114..117 — the cell-centered fluid-state gather ([MCNX-INT-05] of
+  // specs/neutrino-matter-interactions.md: direct one-cell read, no sub-cell
+  // interpolation) and the Valencia v^i -> u^mu lift of mcnux_fluid.hxx on
+  // synthetic in-memory ccc data and analytic ADM fixtures.
+  append_fluidgather_rows(b);
+
+  // Rows 118..127 — the emission count law, per-packet initialization
+  // quantities, cell-key packing, and creation RNG draw map of
+  // specs/packet-representation-and-sampling.md [MCNX-PKT-02/03/05] through
+  // the mcnux_emission.hxx pure functions on pinned deterministic fixtures.
+  append_emission_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.

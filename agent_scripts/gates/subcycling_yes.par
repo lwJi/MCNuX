@@ -9,8 +9,9 @@
 # This file and subcycling_no.par must stay identical except for the single
 # CarpetX::use_subcycling line at the bottom.
 
-# ADMBaseX is required by every MCNuX run (MCNuX INHERITS: ADMBaseX).
-ActiveThorns = "CarpetX ADMBaseX MCNuX"
+# ADMBaseX and HydroBaseX are required by every MCNuX run
+# (MCNuX INHERITS: ADMBaseX HydroBaseX).
+ActiveThorns = "CarpetX ADMBaseX HydroBaseX MCNuX"
 
 Cactus::cctk_itlast = 0
 

@@ -31,6 +31,9 @@ Headers:
 - `mcnux_table_coeffs.hxx` — baseline table-source coefficient assembly + νx dataset mapping.
 - `mcnux_table_range.hxx` — table-range policy: clamping with counters, table-derived transparency floor, `RangedTableCoefficients` wrapper.
 - `mcnux_geodesic.hxx` — geodesic push: metric snapshot/gather, RK4 step.
+- `mcnux_interactions.hxx` — interaction-time draw, fluid-frame energy ν, episode competition, episode draw-map wrappers.
+- `mcnux_emission.hxx` — emission pure functions: count law with floor/Bernoulli remainder, bin-center energy/weight, `K_cell` packing + capacity guard, creation RNG draw map (`draw_k_creation_*`), bin-integrated-eta bridge.
+- `mcnux_fluid.hxx` — cell-centered HydroBaseX fluid-state gather (`CellFluidGather`/`FluidSample`, containing-cell, no sub-cell interpolation) + Valencia v^i→u^μ lift.
 - `mcnux_stats.hxx` — 4σ statistical-acceptance reduction; pinned seed and packet-count constants.
 
 Compiled sources:
@@ -39,7 +42,7 @@ Compiled sources:
 - `mcnux_cadence.cxx` — transport cadence group.
 - `mcnux_coefficients.cxx` — parameter glue: coefficient-source selection and analytic params from `param.ccl` arrays.
 - `mcnux_srcterms.cxx` — source-term zeroing + synthetic-deposit contributor.
-- `mcnux_geodesic.cxx` — runtime packet-population owner (lazy per-patch containers), synthetic-packet seeding fixture, geodesic push scheduled `IN MCNuX_TransportStep`.
+- `mcnux_geodesic.cxx` — runtime packet-population owner (lazy per-patch containers), synthetic-packet seeding fixture, geodesic push scheduled `IN MCNuX_TransportStep`, fluid-gather diagnostic routine (`MCNuX_FluidGatherDiag`, gated `test_fluid_gather`).
 - `mcnux_selftest.cxx` / `mcnux_selftest.hxx` / `mcnux_selftest_<domain>.cxx` — runtime selftest battery: core row table and ordered appender sequence in the first, shared machinery and appender declarations in the header, check code in the per-domain files.
 - `stub.cxx` — compile-time selftest aggregation point.
 
@@ -55,13 +58,13 @@ Compiled sources:
 - The selftest index→name row table in `mcnux_selftest.cxx` is APPEND-ONLY; new checks go in a per-domain `mcnux_selftest_<domain>.cxx` with its appender declared in `mcnux_selftest.hxx`.
 - Every shared header is `#include`d from `stub.cxx` so its static_asserts run on every build.
 - CarpetX's `ghext` is reached via the relative-include idiom (`mcnux_cadence.cxx` is the precedent).
-- The `mcnux_packet_diag` grid array is the per-packet golden observable for transport tests.
+- The `mcnux_packet_diag` grid array is the per-packet golden observable for transport tests; `mcnux_fluid_diag` is its analogue for the fluid-state gather.
 
 ## Testing
 
-- `MCNuX/test/` is the Cactus test home: `test.ccl` (`NPROCS 1`), `<name>.par` parfiles, `<name>/` golden dirs. Current tests: `unit-selftest`, `source-zero-add`, `minkowski-freestream`, `schwarzschild-id`, `hydro-sphere-id`.
+- `MCNuX/test/` is the Cactus test home: `test.ccl` (`NPROCS 1`), `<name>.par` parfiles, `<name>/` golden dirs. Current tests: `unit-selftest`, `source-zero-add`, `minkowski-freestream`, `schwarzschild-id`, `hydro-sphere-id`, `hydro-sphere-gather`.
 - Golden TSVs are copied verbatim from sandbox harness runs, never hand-authored. Harness discovery: a `test/<name>.par` is only runnable once its golden dir `test/<name>/` exists; the first run against an empty golden dir is the capture step (vacuous "0 files identical").
-- Parfile requirements: every MCNuX parfile needs `Cactus::presync_mode = "mixed-error"` and `ADMBaseX` in `ActiveThorns` (MCNuX `INHERITS: ADMBaseX`); runs that read the metric also need `ODESolvers` active (ADMBaseX initial data is scheduled only `IN ODESolvers_Initial`); parfiles activating `TestMCNuX` must also activate `ADMBaseX` and `HydroBaseX`.
+- Parfile requirements: every MCNuX parfile needs `Cactus::presync_mode = "mixed-error"` and both `ADMBaseX` and `HydroBaseX` in `ActiveThorns` (MCNuX `INHERITS: ADMBaseX HydroBaseX`); runs that read the metric also need `ODESolvers` active (ADMBaseX initial data is scheduled only `IN ODESolvers_Initial`).
 - CarpetX/AMReX rejects domains < 8 cells per direction (blocking_factor); off-origin test boxes must set `IO::out_{x,y,z}line_*` inside the domain.
 - Benchmark parfiles set `IO::out_dir = $parfile`, `IO::out_fileinfo = "axis labels"`, `IO::parfile_write = no`, `CarpetX::out_metadata = no`.
 

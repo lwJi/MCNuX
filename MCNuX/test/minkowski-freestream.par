@@ -28,6 +28,7 @@ ActiveThorns = "
     IOUtil
     ODESolvers
     ADMBaseX
+    HydroBaseX
     MCNuX
 "
 

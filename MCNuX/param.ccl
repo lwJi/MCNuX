@@ -43,6 +43,22 @@ BOOLEAN test_synthetic_packets "Seed the deterministic synthetic packet fixture 
 {
 } "no"
 
+# Fluid-gather diagnostic switch of specs/neutrino-matter-interactions.md
+# ([MCNX-INT-05] and the cell-centered u^mu of its inputs table; the
+# `hydro-sphere-gather` benchmark): MCNuX::test_fluid_gather = yes schedules
+# MCNuX_FluidGatherDiag, which reads the HydroBaseX (rho, vel, temperature,
+# Ye) fields at every packet's containing cell (direct one-cell read, no
+# interpolation), lifts v^i to u^mu on the cell-center metric, and mirrors
+# the result into the MCNuX::mcnux_fluid_diag table for golden output. Off by
+# default — the table is verification scaffolding, not physics — and
+# STEERABLE=NEVER, because the table's storage and the routine's scheduling
+# are decided from it at startup. Meaningful only together with
+# test_synthetic_packets (without packets the table stays all-zero).
+
+BOOLEAN test_fluid_gather "Mirror each packet's gathered cell-centered fluid state and four-velocity into the fluid-gather diagnostic table" STEERABLE=NEVER
+{
+} "no"
+
 # Transport-coefficient source of specs/opacity-eos-evaluation.md:118-124 and
 # specs/verification-suite-design.md [MCNX-VER-05]: the production weaklib
 # tables or the analytic (gray) Kirchhoff-form mode, both feeding the
@@ -84,6 +100,21 @@ CCTK_REAL eta_scale[3] "Analytic-mode emissivity scale eta_scale per species [di
 {
   0:* :: "non-negative"
 } 1.0
+
+# Target packet fluid-frame energy of
+# specs/packet-representation-and-sampling.md [MCNX-PKT-02]/[MCNX-PKT-03]:
+# the emission count law N_p = g_s sqrt(-g) dV dt eta_b(s)/E_p creates
+# packets of weight N = E_p/nu, so each packet carries fluid-frame energy E_p
+# and E_p is the sole packet-count control pinned at baseline (per-region
+# E_p, splitting, or rouletting would be a spec change). The spec pins no
+# default; 10 MeV is a typical supernova-neutrino energy scale. STEERABLE=
+# NEVER: the emission loop captures it once at startup, and mid-run changes
+# would alter realized packet counts and golden data.
+
+CCTK_REAL E_p "Target packet fluid-frame energy [MeV] (specs/packet-representation-and-sampling.md [MCNX-PKT-02])" STEERABLE=NEVER
+{
+  (0:* :: "positive target packet fluid-frame energy [MeV]"
+} 10.0
 
 # Single-rate pin of specs/carpetx-thorn-integration.md [MCNX-CTX-06]: MCNuX
 # reads the driver's subcycling switch so that MCNuX_ParamCheck can abort a
