@@ -48,7 +48,7 @@ CCTK_INT mcnux_transport_diag TYPE=SCALAR
 # Not checkpointed: the battery is recomputed from nothing but code, so it is
 # not part of any evolved state.
 
-CCTK_REAL mcnux_selftest TYPE=ARRAY DIM=1 SIZE=128 DISTRIB=CONSTANT TAGS='checkpoint="no"'
+CCTK_REAL mcnux_selftest TYPE=ARRAY DIM=1 SIZE=134 DISTRIB=CONSTANT TAGS='checkpoint="no"'
 {
   selftest_error
   selftest_pass
@@ -87,6 +87,25 @@ CCTK_REAL mcnux_fluid_diag TYPE=ARRAY DIM=1 SIZE=8 DISTRIB=CONSTANT TAGS='checkp
 {
   fl_rho fl_temp fl_ye fl_u0 fl_u1 fl_u2 fl_u3
 } "MCNuX per-packet gathered fluid state (rho [g/cm^3], T [MeV], Ye) and cell-centered four-velocity u^mu"
+
+# Conservation-ledger closure diagnostic table
+# (specs/hydro-coupling-source-terms.md [MCNX-HYD-05]; the closure observable
+# of the `source-zero-add` benchmark): one row per channel X in
+# {P^t, P_x, P_y, P_z, L} (row = channel index in that order), columns the
+# grid total Sum_cells (source value)*dV*dt, the event-side net dX_packets,
+# the gross event activity Sum_events |dX| (the closure denominator), the
+# residual |grid + net|, and the pass flag of
+#   residual <= 1e-13 * max(gross, eps0)
+# (ledger_rtol/ledger_eps0 of src/mcnux_srcterms.hxx, where the eps0 floor is
+# documented). Same shape idiom as mcnux_packet_diag/mcnux_fluid_diag;
+# storage is parameter-gated (schedule.ccl); not checkpointed: the table is
+# recomputed from the source variables and the synthetic event list every
+# fill.
+
+CCTK_REAL mcnux_ledger_diag TYPE=ARRAY DIM=1 SIZE=5 DISTRIB=CONSTANT TAGS='checkpoint="no"'
+{
+  lg_grid_total lg_event_net lg_gross lg_residual lg_pass
+} "MCNuX conservation-ledger closure diagnostics (grid total, event net, gross activity, residual, pass per channel P^t, P_x, P_y, P_z, L)"
 
 # MCNuX-owned source-term grid variables of
 # specs/hydro-coupling-source-terms.md [MCNX-HYD-01] — the published coupling

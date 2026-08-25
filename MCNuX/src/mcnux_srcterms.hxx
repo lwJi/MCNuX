@@ -87,6 +87,114 @@ constexpr LedgerDelta scattering_delta(double N, double pt_in, double px_in,
 }
 
 // ---------------------------------------------------------------------------
+// Conservation-ledger closure audit — [MCNX-HYD-05]
+// (hydro-coupling-source-terms.md:177-188)
+// ---------------------------------------------------------------------------
+
+// Event-side audit accumulator: per channel X in {P^t, P_x, P_y, P_z, L},
+// the signed net packet change Sum_events dX and the gross event activity
+// Sum_events |dX| (the closure denominator — quiet steps with near-total
+// cancellation are judged against activity, not the net).
+//
+// The audit MUST be built from LedgerDelta values (the pre-negation
+// packet-side deltas of emission_delta/absorption_delta/scattering_delta),
+// never from the deposited SourceContribution: deriving the event side from
+// the already-negated grid values would trivially self-cancel instead of
+// independently verifying the deposit.
+struct LedgerAudit {
+  LedgerDelta net{0.0, 0.0, 0.0, 0.0, 0.0};   // Sum_events dX (signed)
+  LedgerDelta gross{0.0, 0.0, 0.0, 0.0, 0.0}; // Sum_events |dX|
+
+  constexpr void accumulate(const LedgerDelta &d) noexcept {
+    net.dPt += d.dPt;
+    net.dPx += d.dPx;
+    net.dPy += d.dPy;
+    net.dPz += d.dPz;
+    net.dL += d.dL;
+    gross.dPt += detail::cabs(d.dPt);
+    gross.dPx += detail::cabs(d.dPx);
+    gross.dPy += detail::cabs(d.dPy);
+    gross.dPz += detail::cabs(d.dPz);
+    gross.dL += detail::cabs(d.dL);
+  }
+};
+
+// The [MCNX-HYD-05] closure tolerance: relative 1e-13 per step (the
+// specs/README.md conservation tolerance).
+inline constexpr double ledger_rtol = 1e-13;
+
+// The documented tiny floor eps0 guarding the all-zero case
+// (hydro-coupling-source-terms.md:188 requires the floor be documented):
+// pinned to 1e-30, matching the absolute floor of the approx_eq closeness
+// predicate (mcnux_units.hxx, conventions-and-units.md:129). With zero gross
+// activity the bound becomes ledger_rtol * 1e-30, so an exactly-balanced
+// all-zero step passes (residual 0) while any nonzero residual on a zero-
+// activity step fails loudly.
+inline constexpr double ledger_eps0 = 1e-30;
+
+// One channel's closure verdict. grid_total is Sum_cells (source value) *
+// dV * dt for that channel; net and gross come from the LedgerAudit. Since
+// the grid holds G = -dX/(dV dt) ([MCNX-HYD-02]), grid_total and net are
+// opposite-signed and must cancel: residual = |grid_total + net|.
+struct LedgerClosure {
+  double residual; // |grid_total + net|
+  double bound;    // ledger_rtol * max(gross, ledger_eps0)
+  bool pass;       // residual <= bound
+};
+
+constexpr LedgerClosure ledger_closure(double grid_total, double net,
+                                       double gross) noexcept {
+  const double residual = detail::cabs(grid_total + net);
+  const double bound =
+      ledger_rtol * (gross > ledger_eps0 ? gross : ledger_eps0);
+  return {residual, bound, residual <= bound};
+}
+
+// ---------------------------------------------------------------------------
+// Shared synthetic-event fixture (the `source-zero-add` benchmark)
+// ---------------------------------------------------------------------------
+
+// One source of truth for the deterministic, iteration-scaled event list:
+// MCNuX_SyntheticDeposit (grid side), MCNuX_LedgerClosure's event-side audit,
+// and the ledger selftest rows all evaluate exactly these values — they must
+// stay bit-identical or the committed golden data of `source-zero-add` and
+// `unit-selftest` moves. dV and dt are fixed synthetic denominators
+// (dV dt = 0.5, exact in binary) — NOT any grid's cell size or the run's
+// time step; the closure multiply must use the same dV dt as the deposit.
+namespace synthfix {
+
+inline constexpr double dV = 2.0;
+inline constexpr double dt = 0.25;
+
+// nu_e emission: N = 3 scale, p^t = 2.5, p_i = (0.5, -1.25, 0.75).
+constexpr LedgerDelta emission(double scale) noexcept {
+  return emission_delta(Species::NuE, 3.0 * scale, 2.5, 0.5, -1.25, 0.75);
+}
+
+// nu_e absorption: N = 1.5 scale, p^t = 3.0, p_i = (-0.5, 1.0, 0.25).
+constexpr LedgerDelta absorption(double scale) noexcept {
+  return absorption_delta(Species::NuE, 1.5 * scale, 3.0, -0.5, 1.0, 0.25);
+}
+
+// Elastic scattering: N = 2 scale, p^t unchanged (1.5), momentum rotated
+// (1.0, 0.25, -0.5) -> (-0.25, 0.75, 0.5).
+constexpr LedgerDelta scattering(double scale) noexcept {
+  return scattering_delta(2.0 * scale, 1.5, 1.0, 0.25, -0.5, 1.5, -0.25, 0.75,
+                          0.5);
+}
+
+// The event-side audit of the whole list at one scale.
+constexpr LedgerAudit audit(double scale) noexcept {
+  LedgerAudit a{};
+  a.accumulate(emission(scale));
+  a.accumulate(absorption(scale));
+  a.accumulate(scattering(scale));
+  return a;
+}
+
+} // namespace synthfix
+
+// ---------------------------------------------------------------------------
 // Compile-time verification — the [MCNX-HYD-02] sign fixtures
 // (hydro-coupling-source-terms.md:143-145,260-262) on exact binary-fraction
 // inputs, so every comparison below is exact (no tolerance).
@@ -180,6 +288,86 @@ static_assert(source_from_delta(emission_delta(Species::NuEBar, 3.0, 2.5, 0.5,
 static_assert(emission_delta(Species::NuX, 3.0, 2.5, 0.5, -1.25, 0.75).dPt ==
                   emission_delta(Species::NuE, 3.0, 2.5, 0.5, -1.25, 0.75).dPt,
               "the degeneracy factor g must not enter the ledger");
+
+// ---------------------------------------------------------------------------
+// Compile-time verification — the [MCNX-HYD-05] closure audit on the shared
+// synthetic-event fixture list at scale 1 (exact binary-fraction inputs, so
+// every comparison below is exact).
+// ---------------------------------------------------------------------------
+
+namespace detail {
+
+// Event side: net and gross of the whole synthetic list at scale 1.
+inline constexpr LedgerAudit audfix = synthfix::audit(1.0);
+
+// Grid side of the same list: each event deposits into exactly one cell, so
+// Sum_cells (source value) * dV * dt is the sum of the three deposited
+// SourceContribution values times dV dt.
+inline constexpr SourceContribution audfix_emis =
+    source_from_delta(synthfix::emission(1.0), synthfix::dV, synthfix::dt);
+inline constexpr SourceContribution audfix_absn =
+    source_from_delta(synthfix::absorption(1.0), synthfix::dV, synthfix::dt);
+inline constexpr SourceContribution audfix_scat =
+    source_from_delta(synthfix::scattering(1.0), synthfix::dV, synthfix::dt);
+inline constexpr double audfix_dVdt = synthfix::dV * synthfix::dt;
+
+inline constexpr double audfix_grid_Pt =
+    (audfix_emis.Gt + audfix_absn.Gt + audfix_scat.Gt) * audfix_dVdt;
+inline constexpr double audfix_grid_Px =
+    (audfix_emis.Gx + audfix_absn.Gx + audfix_scat.Gx) * audfix_dVdt;
+inline constexpr double audfix_grid_Py =
+    (audfix_emis.Gy + audfix_absn.Gy + audfix_scat.Gy) * audfix_dVdt;
+inline constexpr double audfix_grid_Pz =
+    (audfix_emis.Gz + audfix_absn.Gz + audfix_scat.Gz) * audfix_dVdt;
+inline constexpr double audfix_grid_L =
+    (audfix_emis.Sl + audfix_absn.Sl + audfix_scat.Sl) * audfix_dVdt;
+
+} // namespace detail
+
+// Exact event-side values at scale 1: emission d = (7.5, 1.5, -3.75, 2.25,
+// +3), absorption d = (-4.5, 0.75, -1.5, -0.375, -1.5), scattering
+// d = (0, -2.5, 1, 2, 0).
+static_assert(detail::audfix.net.dPt == 3.0 && detail::audfix.net.dPx == -0.25 &&
+                  detail::audfix.net.dPy == -4.25 &&
+                  detail::audfix.net.dPz == 3.875 &&
+                  detail::audfix.net.dL == 1.5,
+              "synthetic-list audit net values");
+static_assert(detail::audfix.gross.dPt == 12.0 &&
+                  detail::audfix.gross.dPx == 4.75 &&
+                  detail::audfix.gross.dPy == 6.25 &&
+                  detail::audfix.gross.dPz == 4.625 &&
+                  detail::audfix.gross.dL == 4.5,
+              "synthetic-list audit gross activity values");
+
+// The worked identity: Sum_cells G * dV * dt = -dX, so grid total + net = 0
+// exactly on every channel (dV dt = 0.5 is a power of two, so the divide/
+// multiply round-trips bitwise).
+static_assert(detail::audfix_grid_Pt + detail::audfix.net.dPt == 0.0 &&
+                  detail::audfix_grid_Px + detail::audfix.net.dPx == 0.0 &&
+                  detail::audfix_grid_Py + detail::audfix.net.dPy == 0.0 &&
+                  detail::audfix_grid_Pz + detail::audfix.net.dPz == 0.0 &&
+                  detail::audfix_grid_L + detail::audfix.net.dL == 0.0,
+              "grid total and event net must cancel exactly on the fixture");
+
+// The closure verdicts: the consistent fixture passes with residual exactly
+// 0; a doubled grid total (the signature of a missing zero point) fails; the
+// all-zero case is judged against the documented eps0 floor and passes.
+static_assert(ledger_closure(detail::audfix_grid_Pt, detail::audfix.net.dPt,
+                             detail::audfix.gross.dPt)
+                      .pass &&
+                  ledger_closure(detail::audfix_grid_Pt,
+                                 detail::audfix.net.dPt,
+                                 detail::audfix.gross.dPt)
+                          .residual == 0.0,
+              "consistent fixture must close with residual exactly 0");
+static_assert(!ledger_closure(2.0 * detail::audfix_grid_Pt,
+                              detail::audfix.net.dPt, detail::audfix.gross.dPt)
+                   .pass,
+              "a doubled grid total must fail closure");
+static_assert(ledger_closure(0.0, 0.0, 0.0).pass &&
+                  ledger_closure(0.0, 0.0, 0.0).bound ==
+                      ledger_rtol * ledger_eps0,
+              "the all-zero case must pass via the documented eps0 floor");
 
 } // namespace MCNuX
 

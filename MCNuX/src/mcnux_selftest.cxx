@@ -194,6 +194,25 @@
 //                                                 q = K_cell, e = n,
 //                                                 k = 3b + s vs direct u,
 //                                                 bitwise)
+// 128       ledger.audit.net                      [MCNX-HYD-05] (event-side
+//                                                 net Sum dX per channel on
+//                                                 the synthetic list, exact)
+// 129       ledger.audit.gross                    [MCNX-HYD-05] (gross
+//                                                 activity Sum |dX| per
+//                                                 channel, exact)
+// 130       ledger.closure.cancellation           [MCNX-HYD-05] (grid total
+//                                                 + event net == 0 exactly,
+//                                                 all five channels)
+// 131       ledger.closure.pass                   [MCNX-HYD-05] (verdict
+//                                                 passes on the consistent
+//                                                 fixture, residual 0)
+// 132       ledger.closure.detects_leak           [MCNX-HYD-05] (doubled grid
+//                                                 total — a missing zero
+//                                                 point — fails all channels)
+// 133       ledger.closure.allzero_floor          [MCNX-HYD-05] (all-zero
+//                                                 list judged against the
+//                                                 documented eps0 floor,
+//                                                 passes)
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -297,6 +316,12 @@ void run_battery(Battery &b) {
   // specs/packet-representation-and-sampling.md [MCNX-PKT-02/03/05] through
   // the mcnux_emission.hxx pure functions on pinned deterministic fixtures.
   append_emission_rows(b);
+
+  // Rows 128..133 — the conservation-ledger closure audit of
+  // specs/hydro-coupling-source-terms.md [MCNX-HYD-05] through the
+  // mcnux_srcterms.hxx audit/closure helpers on the shared synthetic-event
+  // fixture list (synthfix).
+  append_ledger_closure_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.

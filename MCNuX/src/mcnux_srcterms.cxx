@@ -13,10 +13,22 @@
 // deposition — the synthetic list writes one contribution per cell inside a
 // grid loop, so plain += at the point is deterministic).
 
+// TODO: Don't include files from other thorns; create a proper interface
+//
+// The same relative include as mcnux_cadence.cxx (see the rationale there):
+// CarpetX exposes no public capability header for `ghext`, which the
+// conservation-ledger closure diagnostic below walks for its grid-side
+// reduction ([MCNX-CTX-01]).
+#include "../../../CarpetX/CarpetX/src/driver.hxx"
+
 #include "mcnux_srcterms.hxx"
 #include "mcnux_units.hxx"
 
 #include <loop_device.hxx>
+
+#include <AMReX_FabArrayUtility.H>
+#include <AMReX_Loop.H>
+#include <AMReX_MultiFab.H>
 
 #include <cctk.h>
 #include <cctk_Arguments.h>
@@ -83,12 +95,6 @@ extern "C" void MCNuX_SyntheticDeposit(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_MCNuX_SyntheticDeposit;
   DECLARE_CCTK_PARAMETERS;
 
-  // Fixed synthetic denominators (exact binary fractions; dV dt = 0.5).
-  // These are NOT the grid's dV or the run's dt — the synthetic list proves
-  // the ledger arithmetic, not a physical deposition.
-  constexpr double dV = 2.0;
-  constexpr double dt = 0.25;
-
   // Iteration scale: packets-worth N grows linearly with cctk_iteration, so
   // consecutive steps deposit different, analytically-known values.
   const double scale = static_cast<double>(cctk_iteration);
@@ -98,21 +104,21 @@ extern "C" void MCNuX_SyntheticDeposit(CCTK_ARGUMENTS) {
   constexpr FixtureCell absorption_cell{0.125, 0.375, 0.125};
   constexpr FixtureCell scattering_cell{0.125, 0.125, 0.625};
 
-  // The three sign fixtures of hydro-coupling-source-terms.md:260-262,
-  // evaluated on the host through mcnux_srcterms.hxx:
+  // The three sign fixtures of hydro-coupling-source-terms.md:260-262 — the
+  // shared synthfix event list of mcnux_srcterms.hxx (one source of truth
+  // with the [MCNX-HYD-05] closure audit and the selftest rows), evaluated on
+  // the host with the fixed synthetic denominators synthfix::dV, synthfix::dt
+  // (dV dt = 0.5 — NOT the grid's dV or the run's dt; the synthetic list
+  // proves the ledger arithmetic, not a physical deposition):
   //   nu_e emission   -> S_l < 0 and G^t < 0 in exactly the emission cell;
   //   nu_e absorption -> both signs reversed in the absorption cell;
   //   elastic scattering -> momentum components only in the scattering cell.
   const SourceContribution emis = source_from_delta(
-      emission_delta(Species::NuE, 3.0 * scale, 2.5, 0.5, -1.25, 0.75), dV,
-      dt);
+      synthfix::emission(scale), synthfix::dV, synthfix::dt);
   const SourceContribution absn = source_from_delta(
-      absorption_delta(Species::NuE, 1.5 * scale, 3.0, -0.5, 1.0, 0.25), dV,
-      dt);
+      synthfix::absorption(scale), synthfix::dV, synthfix::dt);
   const SourceContribution scat = source_from_delta(
-      scattering_delta(2.0 * scale, 1.5, 1.0, 0.25, -0.5, 1.5, -0.25, 0.75,
-                       0.5),
-      dV, dt);
+      synthfix::scattering(scale), synthfix::dV, synthfix::dt);
 
   grid.loop_all_device<1, 1, 1>(
       grid.nghostzones,
@@ -137,6 +143,127 @@ extern "C" void MCNuX_SyntheticDeposit(CCTK_ARGUMENTS) {
         else if (is_cell(scattering_cell))
           accumulate(scat);
       });
+}
+
+// ---------------------------------------------------------------------------
+// Conservation-ledger closure diagnostic  (MCNuX::mcnux_ledger_diag)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Sum one component of one group's MultiFab over every patch and level,
+// valid cells only (nghost = 0 — ghost cells would double-count the shared
+// faces). Rank-local sum: every MCNuX test runs NPROCS 1 (the fill_packet_diag
+// single-rank note of mcnux_geodesic.cxx); a multi-rank closure would need a
+// reduction over ranks. Single-level assumption likewise: the source-zero-add
+// benchmark is unigrid — with mesh refinement, coarse cells covered by finer
+// levels would double-count and the per-cell dV would differ per level.
+double sum_group_component(const int gi, const int comp) {
+  if (!CarpetX::ghext)
+    CCTK_VERROR("MCNuX reached the ledger-closure diagnostic, but the CarpetX "
+                "driver singleton `ghext` is null "
+                "(specs/carpetx-thorn-integration.md [MCNX-CTX-01])");
+
+  constexpr int tl = 0;
+  double total = 0.0;
+  for (const auto &patchdata : CarpetX::ghext->patchdata) {
+    for (const auto &leveldata : patchdata.leveldata) {
+      const amrex::MultiFab &mf = *leveldata.groupdata.at(gi)->mfab.at(tl);
+      total += double(amrex::ReduceSum(
+          mf, amrex::IntVect(0),
+          [=] AMREX_GPU_DEVICE(const amrex::Box &bx,
+                               const amrex::Array4<const amrex::Real> &arr)
+              -> amrex::Real {
+            amrex::Real s = 0.0;
+            amrex::Loop(bx,
+                        [&](int i, int j, int k) { s += arr(i, j, k, comp); });
+            return s;
+          }));
+    }
+  }
+  return total;
+}
+
+} // namespace
+
+// The conservation-ledger closure diagnostic of [MCNX-HYD-05]
+// (hydro-coupling-source-terms.md:177-188), parameter-gated by
+// MCNuX::test_ledger_closure and scheduled after all contributors of
+// MCNuX_AddToSourceTerms have run: per channel X in {P^t, P_x, P_y, P_z, L},
+//
+//   | Sum_cells (source value) * dV * dt  +  dX_packets |
+//       <=  ledger_rtol * max(Sum_events |dX|, ledger_eps0)
+//
+// with the grid side reduced from the deposited MCNuX::rad_force /
+// MCNuX::lepton_source variables and the event side independently rebuilt
+// from the shared synthfix LedgerDelta list (pre-negation packet deltas —
+// never the deposited SourceContribution, which would trivially self-cancel).
+// The multiply uses the fixture's synthfix::dV * synthfix::dt = 0.5 (the
+// deposit's own normalization), not the grid's cell size or the run's time
+// step. The verdict table is mirrored into MCNuX::mcnux_ledger_diag (one row
+// per channel) for golden output; any failing channel additionally aborts
+// the run so a regression is loud even without a golden diff.
+//
+// The AT initial leg audits the all-zero state (zeroed variables, scale-0
+// event list): both sides are exactly zero and the verdict exercises the
+// documented eps0 floor.
+extern "C" void MCNuX_LedgerClosure(CCTK_ARGUMENTS) {
+  DECLARE_CCTK_ARGUMENTS_MCNuX_LedgerClosure;
+  DECLARE_CCTK_PARAMETERS;
+
+  // Event side: the synthetic list's LedgerDelta values at this iteration's
+  // scale (MCNuX_SyntheticDeposit above deposits exactly this list with
+  // scale = cctk_iteration).
+  const double scale = static_cast<double>(cctk_iteration);
+  LedgerAudit audit{};
+  audit.accumulate(synthfix::emission(scale));
+  audit.accumulate(synthfix::absorption(scale));
+  audit.accumulate(synthfix::scattering(scale));
+
+  // Grid side: Sum_cells (source value) * dV * dt per channel, with the
+  // fixture's dV dt.
+  const int gi_rad = CCTK_GroupIndex("MCNuX::rad_force");
+  const int gi_lep = CCTK_GroupIndex("MCNuX::lepton_source");
+  if (gi_rad < 0 || gi_lep < 0)
+    CCTK_VERROR("MCNuX ledger closure needs the MCNuX::rad_force and "
+                "MCNuX::lepton_source groups");
+
+  const double dVdt = synthfix::dV * synthfix::dt;
+  const double grid_total[5] = {
+      sum_group_component(gi_rad, 0) * dVdt, // rf_t    -> P^t
+      sum_group_component(gi_rad, 1) * dVdt, // rf_x    -> P_x
+      sum_group_component(gi_rad, 2) * dVdt, // rf_y    -> P_y
+      sum_group_component(gi_rad, 3) * dVdt, // rf_z    -> P_z
+      sum_group_component(gi_lep, 0) * dVdt, // lep_src -> L
+  };
+  const double net[5] = {audit.net.dPt, audit.net.dPx, audit.net.dPy,
+                         audit.net.dPz, audit.net.dL};
+  const double gross[5] = {audit.gross.dPt, audit.gross.dPx, audit.gross.dPy,
+                           audit.gross.dPz, audit.gross.dL};
+
+  constexpr const char *channel[5] = {"P^t", "P_x", "P_y", "P_z", "L"};
+  int nfailed = 0;
+  for (int c = 0; c < 5; ++c) {
+    const LedgerClosure lc = ledger_closure(grid_total[c], net[c], gross[c]);
+    lg_grid_total[c] = grid_total[c];
+    lg_event_net[c] = net[c];
+    lg_gross[c] = gross[c];
+    lg_residual[c] = lc.residual;
+    lg_pass[c] = lc.pass ? 1.0 : 0.0;
+    CCTK_VINFO("MCNuX ledger closure %-3s: grid = %.17g, net = %.17g, "
+               "gross = %.17g, residual = %.17g  %s",
+               channel[c], grid_total[c], net[c], gross[c], lc.residual,
+               lc.pass ? "PASS" : "FAIL");
+    if (!lc.pass)
+      ++nfailed;
+  }
+
+  if (nfailed > 0)
+    CCTK_VERROR("MCNuX conservation-ledger closure FAILED on %d of 5 channels "
+                "at iteration %d ([MCNX-HYD-05], "
+                "specs/hydro-coupling-source-terms.md:177-188; see the "
+                "per-channel lines above)",
+                nfailed, cctk_iteration);
 }
 
 } // namespace MCNuX

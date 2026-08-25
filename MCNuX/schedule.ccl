@@ -224,3 +224,40 @@ if (test_synthetic_deposit)
     WRITES: MCNuX::lepton_source(everywhere)
   } "Deposit a synthetic, iteration-scaled event list (ledger-path observable)"
 }
+
+# Conservation-ledger closure diagnostic of [MCNX-HYD-05]
+# (hydro-coupling-source-terms.md:177-188; verification scaffolding,
+# parameter-gated): after all contributors have run, audit the per-channel
+# balance between the grid total Sum_cells (source)*dV*dt (reduced from the
+# deposited variables through the driver's MultiFabs, valid cells only) and
+# the event-side packet total rebuilt independently from the shared synthetic
+# LedgerDelta list. Global mode: one verdict per transport step, the routine
+# walks the patches/levels itself ([MCNX-CTX-03]); the READS: on the source
+# groups and the WRITES: on the verdict table are the complete grid-variable
+# footprint ([MCNX-CTX-04]). The AT initial leg audits the all-zero state
+# (zeroed variables, scale-0 event list — the documented eps0-floor branch)
+# and gives the table defined iteration-0 output, mirroring the
+# packet-diag/fluid-diag precedent.
+
+if (test_ledger_closure)
+{
+  STORAGE: mcnux_ledger_diag
+
+  SCHEDULE MCNuX_LedgerClosure AT initial AFTER MCNuX_ZeroSourceTerms
+  {
+    LANG: C
+    OPTIONS: global
+    READS: MCNuX::rad_force(everywhere)
+    READS: MCNuX::lepton_source(everywhere)
+    WRITES: MCNuX::mcnux_ledger_diag(everywhere)
+  } "Audit the conservation-ledger closure of the all-zero initial state"
+
+  SCHEDULE MCNuX_LedgerClosure IN MCNuX_TransportStep AFTER MCNuX_AddToSourceTerms
+  {
+    LANG: C
+    OPTIONS: global
+    READS: MCNuX::rad_force(everywhere)
+    READS: MCNuX::lepton_source(everywhere)
+    WRITES: MCNuX::mcnux_ledger_diag(everywhere)
+  } "Audit the per-step five-channel conservation-ledger closure"
+}

@@ -26,7 +26,7 @@ Headers:
 - `mcnux_opacity.hxx` — WeakLibInterp call-boundary wrappers.
 - `mcnux_tetrad.hxx` — inverse metric, null closure, tetrad construction.
 - `mcnux_trp.hxx` — trapped-regime opacity relabeling map.
-- `mcnux_srcterms.hxx` — exchange-ledger arithmetic.
+- `mcnux_srcterms.hxx` — exchange-ledger arithmetic + closure audit (`LedgerAudit`/`ledger_closure`, shared `synthfix` synthetic event list).
 - `mcnux_coefficients.hxx` — source-agnostic coefficient interface, analytic Kirchhoff-form formulas, table-vs-analytic dispatch.
 - `mcnux_table_coeffs.hxx` — baseline table-source coefficient assembly + νx dataset mapping.
 - `mcnux_table_range.hxx` — table-range policy: clamping with counters, table-derived transparency floor, `RangedTableCoefficients` wrapper.
@@ -41,7 +41,7 @@ Compiled sources:
 - `mcnux_paramcheck.cxx` — subcycling guard.
 - `mcnux_cadence.cxx` — transport cadence group.
 - `mcnux_coefficients.cxx` — parameter glue: coefficient-source selection and analytic params from `param.ccl` arrays.
-- `mcnux_srcterms.cxx` — source-term zeroing + synthetic-deposit contributor.
+- `mcnux_srcterms.cxx` — source-term zeroing + synthetic-deposit contributor + `MCNuX_LedgerClosure` diagnostic (rank-local unigrid `amrex::ReduceSum` grid reduction, gated `test_ledger_closure`, writes `mcnux_ledger_diag`).
 - `mcnux_geodesic.cxx` — runtime packet-population owner (lazy per-patch containers), synthetic-packet seeding fixture, geodesic push scheduled `IN MCNuX_TransportStep`, fluid-gather diagnostic routine (`MCNuX_FluidGatherDiag`, gated `test_fluid_gather`).
 - `mcnux_selftest.cxx` / `mcnux_selftest.hxx` / `mcnux_selftest_<domain>.cxx` — runtime selftest battery: core row table and ordered appender sequence in the first, shared machinery and appender declarations in the header, check code in the per-domain files.
 - `stub.cxx` — compile-time selftest aggregation point.
