@@ -161,6 +161,39 @@
 //                                                 non-flat gamma_ij:
 //                                                 g_munu u^mu u^nu = -1 and
 //                                                 alpha u^t = W, machine)
+// 118       emission.count.floor_bernoulli        [MCNX-PKT-02] (floor(N_p)
+//                                                 plus one iff u < frac,
+//                                                 strict <, both branches +
+//                                                 u = 0 and integer edges,
+//                                                 exact)
+// 119       emission.count.g4_single_entry        [MCNX-PKT-02] (g = (1,1,4)
+//                                                 at its single point of
+//                                                 entry: nu_x = 4x nu_e,
+//                                                 nu_e_bar == nu_e, exact)
+// 120       emission.init.bin_center              [MCNX-PKT-03] (nu =
+//                                                 0.5 (E_lo + E_hi), exact)
+// 121       emission.init.weight                  [MCNX-PKT-03] (N = E_p/nu,
+//                                                 exact binary fixture)
+// 122       emission.eta.bin_integral             [MCNX-OPA-04] (eta_b =
+//                                                 eta(s, E_b) * dE_b bridge,
+//                                                 exact)
+// 123       emission.key.bit_exact                [MCNX-PKT-05] (K_cell vs
+//                                                 hand-computed uint64
+//                                                 literal, bitwise)
+// 124       emission.key.flag_bit                 [MCNX-PKT-05]/[MCNX-GPU-04]
+//                                                 (bit 63 set on every
+//                                                 packable key)
+// 125       emission.key.capacity                 [MCNX-PKT-05] (capacity
+//                                                 predicate: corners accept,
+//                                                 each overflow/negative
+//                                                 rejects)
+// 126       emission.rng.creation_draw_map        [MCNX-PKT-05] (k = 0..5
+//                                                 order at e = 0 vs direct
+//                                                 u(S, q, 0, k), bitwise)
+// 127       emission.rng.cell_count_draw          [MCNX-PKT-05] (count draw
+//                                                 q = K_cell, e = n,
+//                                                 k = 3b + s vs direct u,
+//                                                 bitwise)
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -258,6 +291,12 @@ void run_battery(Battery &b) {
   // interpolation) and the Valencia v^i -> u^mu lift of mcnux_fluid.hxx on
   // synthetic in-memory ccc data and analytic ADM fixtures.
   append_fluidgather_rows(b);
+
+  // Rows 118..127 — the emission count law, per-packet initialization
+  // quantities, cell-key packing, and creation RNG draw map of
+  // specs/packet-representation-and-sampling.md [MCNX-PKT-02/03/05] through
+  // the mcnux_emission.hxx pure functions on pinned deterministic fixtures.
+  append_emission_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.

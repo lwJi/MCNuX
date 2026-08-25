@@ -32,6 +32,7 @@ Headers:
 - `mcnux_table_range.hxx` — table-range policy: clamping with counters, table-derived transparency floor, `RangedTableCoefficients` wrapper.
 - `mcnux_geodesic.hxx` — geodesic push: metric snapshot/gather, RK4 step.
 - `mcnux_interactions.hxx` — interaction-time draw, fluid-frame energy ν, episode competition, episode draw-map wrappers.
+- `mcnux_emission.hxx` — emission pure functions: count law with floor/Bernoulli remainder, bin-center energy/weight, `K_cell` packing + capacity guard, creation RNG draw map (`draw_k_creation_*`), bin-integrated-eta bridge.
 - `mcnux_fluid.hxx` — cell-centered HydroBaseX fluid-state gather (`CellFluidGather`/`FluidSample`, containing-cell, no sub-cell interpolation) + Valencia v^i→u^μ lift.
 - `mcnux_stats.hxx` — 4σ statistical-acceptance reduction; pinned seed and packet-count constants.
 

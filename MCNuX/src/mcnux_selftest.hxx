@@ -103,6 +103,7 @@ void append_table_range_rows(Battery &b);    // rows 92..99
 void append_stats_rows(Battery &b);          // rows 100..105
 void append_interaction_rows(Battery &b);    // rows 106..113
 void append_fluidgather_rows(Battery &b);    // rows 114..117
+void append_emission_rows(Battery &b);       // rows 118..127
 
 } // namespace MCNuX
 

@@ -101,6 +101,21 @@ CCTK_REAL eta_scale[3] "Analytic-mode emissivity scale eta_scale per species [di
   0:* :: "non-negative"
 } 1.0
 
+# Target packet fluid-frame energy of
+# specs/packet-representation-and-sampling.md [MCNX-PKT-02]/[MCNX-PKT-03]:
+# the emission count law N_p = g_s sqrt(-g) dV dt eta_b(s)/E_p creates
+# packets of weight N = E_p/nu, so each packet carries fluid-frame energy E_p
+# and E_p is the sole packet-count control pinned at baseline (per-region
+# E_p, splitting, or rouletting would be a spec change). The spec pins no
+# default; 10 MeV is a typical supernova-neutrino energy scale. STEERABLE=
+# NEVER: the emission loop captures it once at startup, and mid-run changes
+# would alter realized packet counts and golden data.
+
+CCTK_REAL E_p "Target packet fluid-frame energy [MeV] (specs/packet-representation-and-sampling.md [MCNX-PKT-02])" STEERABLE=NEVER
+{
+  (0:* :: "positive target packet fluid-frame energy [MeV]"
+} 10.0
+
 # Single-rate pin of specs/carpetx-thorn-integration.md [MCNX-CTX-06]: MCNuX
 # reads the driver's subcycling switch so that MCNuX_ParamCheck can abort a
 # run configured with CarpetX::use_subcycling = yes. The CarpetX driver thorn
