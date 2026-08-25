@@ -213,6 +213,24 @@
 //                                                 list judged against the
 //                                                 documented eps0 floor,
 //                                                 passes)
+// 134       emission.bins.edges_are_nodes         [MCNX-OPA-04] (bin edges
+//                                                 equal the tabulated
+//                                                 linear-MeV nodes bitwise,
+//                                                 nodes-as-edges convention)
+// 135       emission.bins.count                   [MCNX-OPA-04] (N nodes ->
+//                                                 N - 1 bins, exact)
+// 136       emission.bins.center                  [MCNX-PKT-03] (grid bin's
+//                                                 center nu = 0.5 (E[b] +
+//                                                 E[b+1]), bitwise)
+// 137       emission.bins.width_eta_bridge        [MCNX-OPA-04] (eta_b =
+//                                                 eta * bin_width, bitwise
+//                                                 vs eta * (E[b+1] - E[b]))
+// 138       emission.map.zero_endpoints           [MCNX-PKT-03] (u = 0 maps
+//                                                 exactly to cell lo and
+//                                                 t_n; half-open intervals)
+// 139       emission.map.linearity                [MCNX-PKT-03] (u = 0.5 ->
+//                                                 lo + 0.5 * width, bitwise
+//                                                 affine map)
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -322,6 +340,14 @@ void run_battery(Battery &b) {
   // mcnux_srcterms.hxx audit/closure helpers on the shared synthetic-event
   // fixture list (synthfix).
   append_ledger_closure_rows(b);
+
+  // Rows 134..139 — the emission energy-bin grid (nodes-as-edges, dE_b from
+  // the tabulated linear-MeV nodes, [MCNX-OPA-04]) and the uniform ->
+  // physical creation mapping (u = 0 -> cell lo / t_n, affine
+  // lo + u * width, [MCNX-PKT-03]) of
+  // specs/packet-representation-and-sampling.md through the
+  // mcnux_emission.hxx pure functions on pinned deterministic fixtures.
+  append_emission_bins_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.
