@@ -169,10 +169,13 @@ double sum_group_component(const int gi, const int comp) {
   for (const auto &patchdata : CarpetX::ghext->patchdata) {
     for (const auto &leveldata : patchdata.leveldata) {
       const amrex::MultiFab &mf = *leveldata.groupdata.at(gi)->mfab.at(tl);
+      // ReduceSum falls back to a host loop outside GPU launch regions, so
+      // the lambda must be host+device (a device-only lambda fails to
+      // compile under HIP, where AMReX cannot detect and stub it out).
       total += double(amrex::ReduceSum(
           mf, amrex::IntVect(0),
-          [=] AMREX_GPU_DEVICE(const amrex::Box &bx,
-                               const amrex::Array4<const amrex::Real> &arr)
+          [=] AMREX_GPU_HOST_DEVICE(const amrex::Box &bx,
+                                    const amrex::Array4<const amrex::Real> &arr)
               -> amrex::Real {
             amrex::Real s = 0.0;
             amrex::Loop(bx,
