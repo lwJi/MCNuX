@@ -145,6 +145,22 @@
 //                                                 e-increment two-episode
 //                                                 script vs direct
 //                                                 u(S, q, e, k), exact)
+// 114       fluid.gather.constant_exact           [MCNX-INT-05] (ccc one-cell
+//                                                 gather, constant synthetic
+//                                                 fields, bitwise)
+// 115       fluid.gather.cell_value_no_interp     [MCNX-INT-05] (affine ccc
+//                                                 fields: off-center queries
+//                                                 return the stored cell
+//                                                 value bitwise — proves no
+//                                                 sub-cell interpolation)
+// 116       fluid.u.static_lift_exact             (v = 0 Valencia lift gives
+//                                                 u = (1/alpha, -beta^i/alpha)
+//                                                 exactly, nontrivial
+//                                                 alpha/beta)
+// 117       fluid.u.normalization                 (nonzero-v lift on a
+//                                                 non-flat gamma_ij:
+//                                                 g_munu u^mu u^nu = -1 and
+//                                                 alpha u^t = W, machine)
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -236,6 +252,12 @@ void run_battery(Battery &b) {
   // [MCNX-INT-01/02/06] through the mcnux_interactions.hxx pure functions on
   // pinned deterministic fixtures.
   append_interaction_rows(b);
+
+  // Rows 114..117 — the cell-centered fluid-state gather ([MCNX-INT-05] of
+  // specs/neutrino-matter-interactions.md: direct one-cell read, no sub-cell
+  // interpolation) and the Valencia v^i -> u^mu lift of mcnux_fluid.hxx on
+  // synthetic in-memory ccc data and analytic ADM fixtures.
+  append_fluidgather_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.

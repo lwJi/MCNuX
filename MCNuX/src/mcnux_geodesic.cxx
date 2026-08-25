@@ -22,6 +22,7 @@
 // CarpetX exposes no public capability header for `ghext`.
 #include "../../../CarpetX/CarpetX/src/driver.hxx"
 
+#include "mcnux_fluid.hxx"
 #include "mcnux_geodesic.hxx"
 #include "mcnux_particles.hxx"
 #include "mcnux_tetrad.hxx"
@@ -110,6 +111,26 @@ MetricGroups metric_groups() {
   return g;
 }
 
+// The four HydroBaseX groups of the fluid-state gather
+// (specs/neutrino-matter-interactions.md [MCNX-INT-05]; vel is the only
+// multi-member group). Mirrors metric_groups().
+struct HydroGroups {
+  int rho, vel, temperature, ye;
+};
+
+HydroGroups hydro_groups() {
+  HydroGroups g{CCTK_GroupIndex("HydroBaseX::rho"),
+                CCTK_GroupIndex("HydroBaseX::vel"),
+                CCTK_GroupIndex("HydroBaseX::temperature"),
+                CCTK_GroupIndex("HydroBaseX::Ye")};
+  if (g.rho < 0 || g.vel < 0 || g.temperature < 0 || g.ye < 0)
+    CCTK_VERROR("MCNuX fluid-state gather needs the HydroBaseX rho, vel, "
+                "temperature, and Ye groups "
+                "(specs/neutrino-matter-interactions.md [MCNX-INT-05]); is "
+                "HydroBaseX active?");
+  return g;
+}
+
 using PacketIter = amrex::ParIterSoA<PIdx::nattribs, IntIdx::nattribs>;
 
 // The gather functor for one particle tile: the ADMBaseX views of the tile's
@@ -134,8 +155,32 @@ make_gather(const CarpetX::GHExt::PatchData &patchdata,
   return gather;
 }
 
-// Walk every particle tile of the population: f(pc, level, pti, gather).
-template <class F> void for_each_packet_tile(const MetricGroups &groups, F &&f) {
+// The fluid-gather functor for one particle tile: the four HydroBaseX ccc
+// views of the tile's box plus the level geometry (same box-index reasoning
+// as make_gather above).
+CellFluidGather
+make_fluid_gather(const CarpetX::GHExt::PatchData &patchdata,
+                  const CarpetX::GHExt::PatchData::LevelData &leveldata,
+                  const HydroGroups &groups, const PacketIter &pti) {
+  constexpr int tl = 0;
+  const int box = pti.index();
+  CellFluidGather gather{};
+  gather.rho = leveldata.groupdata.at(groups.rho)->mfab.at(tl)->array(box);
+  gather.vel = leveldata.groupdata.at(groups.vel)->mfab.at(tl)->array(box);
+  gather.temperature =
+      leveldata.groupdata.at(groups.temperature)->mfab.at(tl)->array(box);
+  gather.ye = leveldata.groupdata.at(groups.ye)->mfab.at(tl)->array(box);
+  const amrex::Geometry &geom = patchdata.amrcore->Geom(leveldata.level);
+  for (int d = 0; d < 3; ++d) {
+    gather.prob_lo[d] = geom.ProbLo(d);
+    gather.dx[d] = geom.CellSize(d);
+  }
+  return gather;
+}
+
+// Walk every particle tile of the population, raw form:
+// f(patchdata, leveldata, pc, pti) — callers build the gathers they need.
+template <class F> void for_each_packet_tile_raw(F &&f) {
   for (int patch = 0; patch < num_packet_patches(); ++patch) {
     const auto &patchdata = CarpetX::ghext->patchdata.at(patch);
     PacketContainer &pc = packet_population(patch);
@@ -144,25 +189,39 @@ template <class F> void for_each_packet_tile(const MetricGroups &groups, F &&f) 
       if (level > pc.finestLevel())
         break;
       for (PacketIter pti(pc, level); pti.isValid(); ++pti)
-        f(pc, level, pti, make_gather(patchdata, leveldata, groups, pti));
+        f(patchdata, leveldata, pc, pti);
     }
   }
+}
+
+// Walk every particle tile of the population: f(pc, level, pti, gather).
+template <class F> void for_each_packet_tile(const MetricGroups &groups, F &&f) {
+  for_each_packet_tile_raw(
+      [&](const CarpetX::GHExt::PatchData &patchdata,
+          const CarpetX::GHExt::PatchData::LevelData &leveldata,
+          PacketContainer &pc, const PacketIter &pti) {
+        f(pc, leveldata.level, pti,
+          make_gather(patchdata, leveldata, groups, pti));
+      });
 }
 
 // ---------------------------------------------------------------------------
 // Diagnostic table  (MCNuX::mcnux_packet_diag)
 // ---------------------------------------------------------------------------
 
-// Size of the MCNuX::mcnux_packet_diag array as declared in interface.ccl.
-int packet_diag_size() {
-  const int gi = CCTK_GroupIndex("MCNuX::mcnux_packet_diag");
+// Size of a 1d DISTRIB=CONSTANT diagnostic array as declared in
+// interface.ccl (mcnux_packet_diag, mcnux_fluid_diag).
+int diag_array_size(const char *const group) {
+  const int gi = CCTK_GroupIndex(group);
   if (gi < 0)
-    CCTK_VERROR("MCNuX::mcnux_packet_diag is not a known group");
+    CCTK_VERROR("%s is not a known group", group);
   const CCTK_INT *const *const sizes = CCTK_GroupSizesI(gi);
   if (!sizes || CCTK_GroupDimI(gi) != 1)
-    CCTK_VERROR("MCNuX::mcnux_packet_diag must be a 1-dimensional grid array");
+    CCTK_VERROR("%s must be a 1-dimensional grid array", group);
   return int(*sizes[0]);
 }
+
+int packet_diag_size() { return diag_array_size("MCNuX::mcnux_packet_diag"); }
 
 struct PacketDiagColumns {
   CCTK_REAL *x, *y, *z, *px, *py, *pz, *pt;
@@ -376,6 +435,99 @@ extern "C" void MCNuX_GeodesicPush(CCTK_ARGUMENTS) {
 
   fill_packet_diag(groups, {pk_x, pk_y, pk_z, pk_px, pk_py, pk_pz, pk_pt},
                    packet_diag_size());
+}
+
+// ---------------------------------------------------------------------------
+// Fluid-gather diagnostic  (MCNuX::mcnux_fluid_diag)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Number of doubles per packet in the device staging buffer:
+// id, rho, T, Ye, u^0, u^1, u^2, u^3.
+constexpr int fluid_diag_width = 8;
+
+} // namespace
+
+// Fill the per-packet fluid-gather diagnostic table
+// (specs/neutrino-matter-interactions.md): for every packet, the direct
+// one-cell read of the HydroBaseX (rho, T[MeV], Ye) fields at the packet's
+// containing cell ([MCNX-INT-05], CellFluidGather — units verbatim, no
+// interpolation) and the cell-centered fluid four-velocity u^mu from the
+// Valencia lift of mcnux_fluid.hxx, with the metric gathered at the
+// containing cell's CENTER coordinate (the spec's u^mu is cell-centered).
+// Row keying, staging, and the single-rank assumption are those of
+// fill_packet_diag above.
+extern "C" void MCNuX_FluidGatherDiag(CCTK_ARGUMENTS) {
+  DECLARE_CCTK_ARGUMENTS_MCNuX_FluidGatherDiag;
+  DECLARE_CCTK_PARAMETERS;
+
+  const MetricGroups mgroups = metric_groups();
+  const HydroGroups hgroups = hydro_groups();
+  const int nrows = diag_array_size("MCNuX::mcnux_fluid_diag");
+
+  CCTK_REAL *const cols[7] = {fl_rho, fl_temp, fl_ye, fl_u0,
+                              fl_u1,  fl_u2,   fl_u3};
+  for (int c = 0; c < 7; ++c)
+    for (int r = 0; r < nrows; ++r)
+      cols[c][r] = 0.0;
+
+  for_each_packet_tile_raw([&](const CarpetX::GHExt::PatchData &patchdata,
+                               const CarpetX::GHExt::PatchData::LevelData
+                                   &leveldata,
+                               PacketContainer &, const PacketIter &pti) {
+    const long np = pti.numParticles();
+    if (np == 0)
+      return;
+    const auto ptd = pti.GetParticleTile().getParticleTileData();
+    const VertexMetricGather mgather =
+        make_gather(patchdata, leveldata, mgroups, pti);
+    const CellFluidGather fgather =
+        make_fluid_gather(patchdata, leveldata, hgroups, pti);
+
+    amrex::Gpu::DeviceVector<double> staging(std::size_t(np) *
+                                             fluid_diag_width);
+    double *const out = staging.data();
+    amrex::ParallelFor(np, [=] AMREX_GPU_DEVICE(long ip) noexcept {
+      const double x[3] = {ptd.rdata(PIdx::x)[ip], ptd.rdata(PIdx::y)[ip],
+                           ptd.rdata(PIdx::z)[ip]};
+      int i0[3];
+      fgather.containing_cell(x[0], x[1], x[2], i0);
+      const FluidSample s = fgather.at_cell(i0);
+      // Metric at the containing cell's center: u^mu is cell-centered.
+      const MetricSnapshot m = mgather(fgather.cell_center(i0[0], 0),
+                                       fgather.cell_center(i0[1], 1),
+                                       fgather.cell_center(i0[2], 2));
+      double u[4];
+      valencia_four_velocity(m.alpha, m.beta, m.g, s.vel, u);
+      double *const row = out + ip * fluid_diag_width;
+      row[0] = double(amrex::particle_impl::unpack_id(ptd.m_idcpu[ip]));
+      row[1] = s.state.rho_cgs;
+      row[2] = s.state.T_MeV;
+      row[3] = s.state.Ye;
+      row[4] = u[0];
+      row[5] = u[1];
+      row[6] = u[2];
+      row[7] = u[3];
+    });
+    amrex::Gpu::streamSynchronize();
+
+    std::vector<double> host(std::size_t(np) * fluid_diag_width);
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost, staging.begin(), staging.end(),
+                     host.begin());
+
+    for (long ip = 0; ip < np; ++ip) {
+      const double *const row = host.data() + ip * fluid_diag_width;
+      const long id = long(row[0]);
+      if (id < 1 || id > nrows)
+        CCTK_VERROR("MCNuX packet id %ld is outside the fluid diagnostic "
+                    "table (MCNuX::mcnux_fluid_diag has SIZE=%d rows)",
+                    id, nrows);
+      const int r = int(id - 1);
+      for (int c = 0; c < 7; ++c)
+        cols[c][r] = row[1 + c];
+    }
+  });
 }
 
 } // namespace MCNuX

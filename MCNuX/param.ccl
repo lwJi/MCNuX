@@ -43,6 +43,22 @@ BOOLEAN test_synthetic_packets "Seed the deterministic synthetic packet fixture 
 {
 } "no"
 
+# Fluid-gather diagnostic switch of specs/neutrino-matter-interactions.md
+# ([MCNX-INT-05] and the cell-centered u^mu of its inputs table; the
+# `hydro-sphere-gather` benchmark): MCNuX::test_fluid_gather = yes schedules
+# MCNuX_FluidGatherDiag, which reads the HydroBaseX (rho, vel, temperature,
+# Ye) fields at every packet's containing cell (direct one-cell read, no
+# interpolation), lifts v^i to u^mu on the cell-center metric, and mirrors
+# the result into the MCNuX::mcnux_fluid_diag table for golden output. Off by
+# default — the table is verification scaffolding, not physics — and
+# STEERABLE=NEVER, because the table's storage and the routine's scheduling
+# are decided from it at startup. Meaningful only together with
+# test_synthetic_packets (without packets the table stays all-zero).
+
+BOOLEAN test_fluid_gather "Mirror each packet's gathered cell-centered fluid state and four-velocity into the fluid-gather diagnostic table" STEERABLE=NEVER
+{
+} "no"
+
 # Transport-coefficient source of specs/opacity-eos-evaluation.md:118-124 and
 # specs/verification-suite-design.md [MCNX-VER-05]: the production weaklib
 # tables or the analytic (gray) Kirchhoff-form mode, both feeding the

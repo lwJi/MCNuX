@@ -151,6 +151,53 @@ if (test_synthetic_packets)
   } "Push every packet along its null geodesic over one transport step"
 }
 
+# Fluid-state/four-velocity gather diagnostic of
+# specs/neutrino-matter-interactions.md ([MCNX-INT-05]: cell-centered fluid
+# state of the packet's containing cell, direct one-cell read; inputs table:
+# cell-centered u^mu with g_munu u^mu u^nu = -1). Parameter-gated
+# verification scaffolding (the `hydro-sphere-gather` benchmark). The initial
+# leg provides the table's iteration-0 data (after ODESolvers_Initial has
+# produced both the ADMBaseX and HydroBaseX initial data, and after the
+# packet seeding when that fixture is active); the in-step leg refreshes the
+# table after the push, once per coarsest-level Delta t. Modes mirror the
+# seed/push pair above ([MCNX-CTX-03]); the READS: on the ADMBaseX and
+# HydroBaseX groups plus the table WRITES: are the complete grid-variable
+# footprint ([MCNX-CTX-04]).
+
+if (test_fluid_gather)
+{
+  STORAGE: mcnux_fluid_diag
+
+  SCHEDULE MCNuX_FluidGatherDiag AT initial AFTER ODESolvers_Initial AFTER MCNuX_SeedSyntheticPackets
+  {
+    LANG: C
+    OPTIONS: global
+    READS: ADMBaseX::metric(everywhere)
+    READS: ADMBaseX::lapse(everywhere)
+    READS: ADMBaseX::shift(everywhere)
+    READS: HydroBaseX::rho(everywhere)
+    READS: HydroBaseX::vel(everywhere)
+    READS: HydroBaseX::temperature(everywhere)
+    READS: HydroBaseX::Ye(everywhere)
+    WRITES: MCNuX::mcnux_fluid_diag(everywhere)
+  } "Fill the per-packet fluid-gather diagnostic table (initial data)"
+
+  SCHEDULE MCNuX_FluidGatherDiag IN MCNuX_TransportStep AFTER MCNuX_GeodesicPush
+  {
+    LANG: C
+    OPTIONS: level
+    READS: ADMBaseX::metric(everywhere)
+    READS: ADMBaseX::lapse(everywhere)
+    READS: ADMBaseX::shift(everywhere)
+    READS: HydroBaseX::rho(everywhere)
+    READS: HydroBaseX::vel(everywhere)
+    READS: HydroBaseX::temperature(everywhere)
+    READS: HydroBaseX::Ye(everywhere)
+    READS: MCNuX::mcnux_fluid_diag(everywhere)
+    WRITES: MCNuX::mcnux_fluid_diag(everywhere)
+  } "Refresh the per-packet fluid-gather diagnostic table after the push"
+}
+
 # The named, empty-by-default extension group (the TmunuBaseX_AddToTmunu
 # analogue): every deposition routine is a contributor scheduled in here — a
 # self-accumulating READS: + WRITES: pair on the source variables, performing

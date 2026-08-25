@@ -1,4 +1,5 @@
 #include "mcnux_coefficients.hxx"
+#include "mcnux_fluid.hxx"
 #include "mcnux_geodesic.hxx"
 #include "mcnux_interactions.hxx"
 #include "mcnux_opacity.hxx"

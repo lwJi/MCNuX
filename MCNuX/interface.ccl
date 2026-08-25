@@ -3,14 +3,17 @@
 IMPLEMENTS: MCNuX
 
 # The geodesic push of specs/geodesic-propagation.md reads the ADMBaseX
-# metric, lapse, and shift grid functions (READS: clauses in schedule.ccl);
+# metric, lapse, and shift grid functions, and the fluid-state gather of
+# specs/neutrino-matter-interactions.md reads the HydroBaseX (rho, vel,
+# temperature, Ye) grid functions (READS: clauses in schedule.ccl);
 # the CST accepts a READS: on another implementation's variables only through
 # an INHERITS: (a bare cross-thorn READS: is a CST error: "No access to
 # variable ... Maybe add an inherits clause"). This is read access to the
-# published spacetime interface only — no dependence on any evolution thorn
-# (GRMHD-/spacetime-agnosticism of specs/build-and-integration.md is kept:
-# ADMBaseX is the data-declaring base thorn, not an evolver).
-INHERITS: ADMBaseX
+# published spacetime/fluid interfaces only — no dependence on any evolution
+# thorn (GRMHD-/spacetime-agnosticism of specs/build-and-integration.md is
+# kept: ADMBaseX and HydroBaseX are the data-declaring base thorns, not
+# evolvers; the sibling precedent is TestMCNuX/interface.ccl).
+INHERITS: ADMBaseX HydroBaseX
 
 USES INCLUDE HEADER: loop_device.hxx
 
@@ -45,7 +48,7 @@ CCTK_INT mcnux_transport_diag TYPE=SCALAR
 # Not checkpointed: the battery is recomputed from nothing but code, so it is
 # not part of any evolved state.
 
-CCTK_REAL mcnux_selftest TYPE=ARRAY DIM=1 SIZE=114 DISTRIB=CONSTANT TAGS='checkpoint="no"'
+CCTK_REAL mcnux_selftest TYPE=ARRAY DIM=1 SIZE=118 DISTRIB=CONSTANT TAGS='checkpoint="no"'
 {
   selftest_error
   selftest_pass
@@ -68,6 +71,22 @@ CCTK_REAL mcnux_packet_diag TYPE=ARRAY DIM=1 SIZE=8 DISTRIB=CONSTANT TAGS='check
 {
   pk_x pk_y pk_z pk_px pk_py pk_pz pk_pt
 } "MCNuX synthetic packet diagnostics (position, lower momentum, covariant energy per fixture packet)"
+
+# Per-packet fluid-gather diagnostic table
+# (specs/neutrino-matter-interactions.md [MCNX-INT-05] and its inputs table:
+# the cell-centered (rho, T[MeV], Ye) fluid state of the packet's containing
+# cell, read verbatim with no sub-cell interpolation, plus the cell-centered
+# fluid four-velocity u^mu from the Valencia lift of mcnux_fluid.hxx; the
+# `hydro-sphere-gather` benchmark golden-checks it against the closed-form
+# TestMCNuX profile). Same shape and row keying as mcnux_packet_diag: one row
+# per fixture packet (row = packet id - 1), SIZE cross-checked at runtime.
+# Storage is parameter-gated (schedule.ccl); not checkpointed: the table is
+# recomputed from the population and the fluid state every fill.
+
+CCTK_REAL mcnux_fluid_diag TYPE=ARRAY DIM=1 SIZE=8 DISTRIB=CONSTANT TAGS='checkpoint="no"'
+{
+  fl_rho fl_temp fl_ye fl_u0 fl_u1 fl_u2 fl_u3
+} "MCNuX per-packet gathered fluid state (rho [g/cm^3], T [MeV], Ye) and cell-centered four-velocity u^mu"
 
 # MCNuX-owned source-term grid variables of
 # specs/hydro-coupling-source-terms.md [MCNX-HYD-01] — the published coupling

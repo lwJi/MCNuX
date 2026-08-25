@@ -1,0 +1,104 @@
+# hydro-sphere-gather — the fluid-state/four-velocity gather of
+# specs/neutrino-matter-interactions.md as a Cactus regression test.
+#
+# [MCNX-INT-05]: the fluid state consumed at a packet is the CELL-CENTERED
+# state of the packet's containing cell, read directly ("never
+# re-interpolated sub-cell"); the spec's inputs table pins u^mu as the
+# cell-centered fluid four-velocity with g_munu u^mu u^nu = -1. The
+# deterministic synthetic packet fixture of MCNuX_SeedSyntheticPackets is
+# seeded into the TestMCNuX "uniform sphere" profile (the hydro-sphere-id
+# fixture writer: piecewise (rho, T[MeV], Ye), vel = 0, units verbatim), and
+# MCNuX_FluidGatherDiag mirrors each packet's gathered (rho, T, Ye) and
+# lifted u^mu into the MCNuX::mcnux_fluid_diag table, golden-checked at the
+# harness defaults ABSTOL = RELTOL = 1e-12 at every iteration.
+#
+# Expected values are closed-form: each row carries the profile branch of the
+# packet's CONTAINING CELL CENTER (not of the packet position), and with
+# vel = 0 on flat Minkowski the Valencia lift gives u = (1, 0, 0, 0) exactly.
+#
+# Sphere-radius pinning (this parfile deliberately shrinks the sphere so the
+# fixture packets straddle the surface; hydro-sphere-id's golden is
+# untouched): on this 16^3 grid over [-1, 1]^3 (dx = 0.125) every
+# containing-cell-center distance from the origin is 0.0625 sqrt(a^2+b^2+c^2)
+# with a, b, c odd integers; such sums are = 3 (mod 8), so the distance
+# shells nearest R_s = 0.25 = 0.0625*4 are 0.0625 sqrt(11) = 0.20729 and
+# 0.0625 sqrt(19) = 0.27243 — no FP-marginal surface classification ever,
+# at iteration 0 or after any push. At iteration 0 the six axis-aligned
+# packets (|x| = 0.125, cell-center distance 0.20729) sit inside
+# (rho0, T0, Ye0) and the two oblique packets (cell-center distances 0.40984
+# and 0.27243) outside (rho_amb, T_amb, Ye_amb), covering both branches.
+#
+# Two transport steps (dt = 0.0625 at the default dtfac): the in-step leg of
+# MCNuX_FluidGatherDiag (IN MCNuX_TransportStep, after the geodesic push)
+# refreshes the table as packets move — packet 1 (+x at coordinate speed 1)
+# crosses from cell center 0.1875 to 0.3125 and flips to the ambient branch
+# by iteration 2, so the golden data also witnesses a cell change.
+#
+# ODESolvers must be active: ADMBaseX and HydroBaseX initial data are both
+# scheduled IN ODESolvers_Initial, and the gather reads metric and fluid.
+
+ActiveThorns = "
+    CarpetX
+    IOUtil
+    ODESolvers
+    ADMBaseX
+    HydroBaseX
+    MCNuX
+    TestMCNuX
+"
+
+# Mandatory for any MCNuX run: CarpetX's own CCTK_PARAMCHECK routine rejects
+# every other presync mode.
+Cactus::presync_mode = "mixed-error"
+
+# The subject of this benchmark: the synthetic packet fixture plus the
+# fluid-gather diagnostic. The self-test battery and the deposit fixture are
+# off; the analytic coefficient source keeps the run table-free.
+MCNuX::test_synthetic_packets = yes
+MCNuX::test_fluid_gather = yes
+MCNuX::test_synthetic_deposit = no
+MCNuX::run_selftests = no
+MCNuX::opacity_source = "analytic"
+
+# Flat background: the ADMBaseX defaults, restated.
+ADMBaseX::initial_data = "Cartesian Minkowski"
+ADMBaseX::initial_lapse = "one"
+ADMBaseX::initial_shift = "zero"
+
+# The TestMCNuX "uniform sphere" profile of hydro-sphere-id, with the sphere
+# radius shrunk to 0.25 (see the pinning analysis above) so the packet
+# fixture samples both branches. vel = 0 by the writer's contract.
+HydroBaseX::initial_hydro = "uniform sphere"
+TestMCNuX::rho0 = 1.0e12
+TestMCNuX::T0 = 5.0
+TestMCNuX::Ye0 = 0.25
+TestMCNuX::rho_amb = 1.0e6
+TestMCNuX::T_amb = 1.0
+TestMCNuX::Ye_amb = 0.45
+TestMCNuX::sphere_x0 = 0.0
+TestMCNuX::sphere_y0 = 0.0
+TestMCNuX::sphere_z0 = 0.0
+TestMCNuX::sphere_radius = 0.25
+
+# 16^3 cells over the CarpetX default domain [-1, 1]^3 (dx = 0.125): the
+# hydro-sphere-id grid, on which the radius analysis above is pinned.
+CarpetX::ncells_x = 16
+CarpetX::ncells_y = 16
+CarpetX::ncells_z = 16
+
+Cactus::cctk_itlast = 2
+
+IO::out_dir = $parfile
+IO::out_every = 1
+IO::parfile_write = no
+
+# Keep the column-label header but drop IOUtil's creation date, hostname, and
+# absolute parameter-file path (see unit-selftest.par).
+IO::out_fileinfo = "axis labels"
+
+CarpetX::out_metadata = no
+
+# The golden data: the per-packet fluid-gather table, one file per iteration.
+CarpetX::out_tsv_vars = "
+    MCNuX::mcnux_fluid_diag
+"
