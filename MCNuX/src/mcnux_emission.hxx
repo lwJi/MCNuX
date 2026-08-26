@@ -245,6 +245,38 @@ constexpr std::uint64_t cell_key(int patch, int level, int ic, int jc, int kc,
 }
 
 // ---------------------------------------------------------------------------
+// Per-packet RNG key  [MCNX-PKT-05] / [MCNX-GPU-04]
+// ---------------------------------------------------------------------------
+
+// The spec's per-packet draw key q is "the packet's own id" (the idcpu word
+// of the schema, specs/packet-representation-and-sampling.md:65). The RAW
+// AMReX idcpu word is deliberately NOT used as q: amrex::pack_id sets bit 63
+// = 1 on every LIVE particle (the validity flag,
+// amrex/Src/Particle/AMReX_Particle.H), which would collide with the
+// always-set flag bit 63 of cell_key above and break the cell-key/packet-key
+// disjointness that [MCNX-GPU-04] relies on. q is therefore the REPACKED
+// logical key
+//
+//   q = (cpu << 39) | id
+//
+// with id the AMReX-assigned particle id (monotonic from 1, at most
+// LastParticleID = 2^39 - 3, never reused — 39 bits) in bits 0..38 and the
+// creating rank's cpu (< 2^24) in bits 39..62, so bit 63 is PROVABLY clear:
+// packet keys and cell keys occupy disjoint key spaces, and (id, cpu) -> q
+// is injective, preserving [MCNX-GPU-04]'s cross-rank uniqueness. This is a
+// deliberate, documented clarification of the spec's "idcpu" wording (the
+// mcnux_fluid.hxx decision-recording precedent), not a silent workaround.
+// The key is computable from (base_id + ordinal, MyProc()) BEFORE any draw,
+// as the creation draw map requires (per-packet draws key on the packet's
+// own id).
+constexpr std::uint64_t packet_rng_key(std::uint64_t id,
+                                       std::uint64_t cpu) noexcept {
+  assert(id >= 1 && id <= (std::uint64_t{1} << 39) - 3);
+  assert(cpu < (std::uint64_t{1} << 24));
+  return (cpu << 39) | id;
+}
+
+// ---------------------------------------------------------------------------
 // Creation RNG draw map  [MCNX-PKT-05]
 // ---------------------------------------------------------------------------
 
@@ -472,6 +504,16 @@ static_assert(detail::cell_key_fixture_holds(),
 static_assert(detail::cell_key_flag_bit_holds(),
               "[MCNX-PKT-05]/[MCNX-GPU-04] every cell key has bit 63 set "
               "(disambiguation from packet idcpu values, which never do)");
+static_assert(packet_rng_key(1, 0) == 1 &&
+                  packet_rng_key(5, 3) ==
+                      ((std::uint64_t{3} << 39) | std::uint64_t{5}),
+              "[MCNX-PKT-05] packet_rng_key must pack q = (cpu << 39) | id");
+static_assert((packet_rng_key((std::uint64_t{1} << 39) - 3,
+                              (std::uint64_t{1} << 24) - 1) >>
+               63) == 0u,
+              "[MCNX-GPU-04] every packet RNG key has bit 63 clear (max id "
+              "2^39 - 3, cpu < 2^24 => bits 0..62 only), so packet keys and "
+              "cell keys occupy disjoint key spaces");
 static_assert(detail::cell_key_capacity_table_holds(),
               "[MCNX-PKT-05] cell-key capacity guard: patch < 128, "
               "level < 256, offsets in [0, 65536), no negatives");

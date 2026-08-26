@@ -119,6 +119,15 @@ struct LedgerAudit {
   }
 };
 
+// The per-step event-side audit of the production emission loop
+// ([MCNX-HYD-05] event side): reset and refilled once per transport step by
+// MCNuX_Emission (mcnux_emission.cxx, which defines it) from the SAME
+// pre-negation LedgerDelta values it deposits, with the identical code-unit
+// dV/dt normalization pair. Exposed here so the later ledger-closure
+// extension task can fold it into MCNuX_LedgerClosure beyond the synthfix
+// list; nothing consumes it yet.
+LedgerAudit &emission_step_audit();
+
 // The [MCNX-HYD-05] closure tolerance: relative 1e-13 per step (the
 // specs/README.md conservation tolerance).
 inline constexpr double ledger_rtol = 1e-13;

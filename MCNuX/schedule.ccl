@@ -202,10 +202,82 @@ if (test_fluid_gather)
 # analogue): every deposition routine is a contributor scheduled in here — a
 # self-accumulating READS: + WRITES: pair on the source variables, performing
 # read-modify-write += only, ordered after the zeroing by group ordering.
+# Also AFTER MCNuX_TransportObserver: the emission contributor keys its
+# [MCNX-PKT-05] cell draws on the 0-based step index
+# n = *transport_step_count - 1, which is well-defined only once the
+# observer has incremented the counter for this step.
 
-SCHEDULE GROUP MCNuX_AddToSourceTerms IN MCNuX_TransportStep AFTER MCNuX_ZeroSourceTerms
+SCHEDULE GROUP MCNuX_AddToSourceTerms IN MCNuX_TransportStep AFTER MCNuX_ZeroSourceTerms AFTER MCNuX_TransportObserver
 {
 } "Add to the MCNuX source-term variables here"
+
+# Production emission/creation loop of
+# specs/packet-representation-and-sampling.md [MCNX-PKT-02/03/05]
+# (parameter-gated by MCNuX::enable_emission): per cell, species, and energy
+# bin, the count law decides how many packets to create; created packets are
+# appended to the packet population and their emission ledger deltas are
+# deposited into the source-term variables through the contributor idiom of
+# [MCNX-HYD-03] (group membership gives the zero-then-add ordering and
+# automatic ledger-closure coverage). Level mode per [MCNX-CTX-03]: the
+# routine is invoked once per traversal and walks the patches, levels, and
+# grid boxes itself. Note the ordering consequence recorded at the group
+# declaration above: MCNuX_GeodesicPush (when active) runs BEFORE this
+# group, so packets created at step n receive their first push at step
+# n + 1.
+
+if (enable_emission)
+{
+  SCHEDULE MCNuX_Emission IN MCNuX_AddToSourceTerms AFTER MCNuX_TransportObserver
+  {
+    LANG: C
+    OPTIONS: level
+    READS: ADMBaseX::metric(everywhere)
+    READS: ADMBaseX::lapse(everywhere)
+    READS: ADMBaseX::shift(everywhere)
+    READS: HydroBaseX::rho(everywhere)
+    READS: HydroBaseX::vel(everywhere)
+    READS: HydroBaseX::temperature(everywhere)
+    READS: HydroBaseX::Ye(everywhere)
+    READS: MCNuX::transport_step_count(everywhere)
+    READS: MCNuX::rad_force(everywhere)
+    READS: MCNuX::lepton_source(everywhere)
+    WRITES: MCNuX::rad_force(everywhere)
+    WRITES: MCNuX::lepton_source(everywhere)
+  } "Create emission packets and deposit their ledger deltas (count law + creation draw map)"
+}
+
+# Emission diagnostic (parameter-gated by MCNuX::test_emission, meaningful
+# only with enable_emission; the `emit-smoke` benchmark): mirror the created
+# population into the per-packet golden table after the emission contributor
+# has run. The AT initial leg fills the empty-population (all-zero) table so
+# iteration-0 output is defined (the FluidGatherDiag precedent); modes
+# mirror the seed/push pair ([MCNX-CTX-03]).
+
+if (enable_emission && test_emission)
+{
+  STORAGE: mcnux_packet_diag
+
+  SCHEDULE MCNuX_EmissionDiag AT initial AFTER ODESolvers_Initial
+  {
+    LANG: C
+    OPTIONS: global
+    READS: ADMBaseX::metric(everywhere)
+    READS: ADMBaseX::lapse(everywhere)
+    READS: ADMBaseX::shift(everywhere)
+    WRITES: MCNuX::mcnux_packet_diag(everywhere)
+  } "Fill the per-packet diagnostic table (initial data: empty population)"
+
+  SCHEDULE MCNuX_EmissionDiag IN MCNuX_AddToSourceTerms AFTER MCNuX_Emission
+  {
+    LANG: C
+    OPTIONS: level
+    READS: ADMBaseX::metric(everywhere)
+    READS: ADMBaseX::lapse(everywhere)
+    READS: ADMBaseX::shift(everywhere)
+    READS: MCNuX::mcnux_packet_diag(everywhere)
+    WRITES: MCNuX::mcnux_packet_diag(everywhere)
+  } "Mirror the emitted packet population into the diagnostic table"
+}
 
 # The synthetic-event contributor (verification scaffolding, parameter-gated):
 # proves the deposition/ledger path of [MCNX-HYD-02] before any real event
