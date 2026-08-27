@@ -78,7 +78,7 @@
 // unit tests can all include it. The static_asserts at the bottom are the
 // compile-time half of the T18a-core test surface; the runtime half lives in
 // the `unit-selftest` battery (mcnux_selftest_interactions.cxx, rows
-// 106..113).
+// 106..113, and mcnux_selftest_cellexit.cxx, rows 140..145).
 
 #include "mcnux_rng.hxx"    // u(S, q, e, k)
 #include "mcnux_tetrad.hxx" // MCNUX_HOST_DEVICE, metric helpers, csqrt
@@ -181,6 +181,75 @@ constexpr EpisodeOutcome compete_episode(double dt_s, double dt_a,
   if (dt_cell_exit < dt_rem)
     return {EpisodeEnd::CellExit, dt_cell_exit};
   return {EpisodeEnd::StepEnd, dt_rem};
+}
+
+// ---------------------------------------------------------------------------
+// Cell-exit time  (feeds compete_episode's dt_cell_exit, [MCNX-INT-02])
+// ---------------------------------------------------------------------------
+// Coordinate time from the current position, along the FROZEN coordinate-
+// frame velocity dx^i/dt of the episode-start geodesic_rhs evaluation
+// ([MCNX-GEO-01]: dxdt[i] = p^i/p^t - beta^i), to the boundary of the
+// containing cell. NO SPEC PINS THIS ALGORITHM — cell-exit-time tracking is
+// implementation freedom (neutrino-matter-interactions.md, Implementation
+// freedom); only the [MCNX-INT-02] competition it feeds is normative. The
+// frozen-kinematics assumption above applies: the caller evaluates
+// geodesic_rhs ONCE at episode start and passes dxdt here — this helper
+// never re-derives velocity or p^t, and takes no gather functor.
+//
+// Boundary convention (deliberate choice, recorded per the decision-recording
+// idiom of mcnux_fluid.hxx): cell membership is HALF-OPEN, [i dx, (i+1) dx)
+// per axis — i0 = floor((x - prob_lo)/dx) is the containing cell, the
+// identical one-line anchor arithmetic as CellFluidGather::containing_cell
+// (mcnux_fluid.hxx) and the emission creation cell (cell_lo = prob_lo + i dx,
+// mcnux_emission.cxx). Consequence: a packet exactly on its lower face moving
+// in -x yields dt = 0 (a signed zero, == 0.0) — an immediate CellExit in
+// compete_episode, since finite candidates fire only if STRICTLY smaller.
+//
+// Per axis, the candidate time is (face - x)/dxdt toward the faced boundary;
+// a zero velocity component contributes +inf via an explicit branch BEFORE
+// any division (the kappa == 0.0 -> +inf idiom of interaction_time above:
+// 0/0 must never reach the FPU), so the result is never NaN and never
+// negative for in-cell positions; an all-zero velocity returns +inf, a legal
+// compete_episode input (the channel/boundary sentinels already compete).
+
+// Core on explicit faces: constexpr (rational arithmetic only), the
+// p_t_closure_with-style testable layer. face_lo/face_hi are the containing
+// cell's boundary coordinates per axis.
+constexpr double dt_to_cell_exit_faces(const double x[3], const double dxdt[3],
+                                       const double face_lo[3],
+                                       const double face_hi[3]) noexcept {
+  double dt_min = std::numeric_limits<double>::infinity();
+  for (int d = 0; d < 3; ++d) {
+    double cand = std::numeric_limits<double>::infinity();
+    if (dxdt[d] > 0.0)
+      cand = (face_hi[d] - x[d]) / dxdt[d];
+    else if (dxdt[d] < 0.0)
+      cand = (face_lo[d] - x[d]) / dxdt[d];
+    if (cand < dt_min)
+      dt_min = cand;
+  }
+  return dt_min;
+}
+
+// Production wrapper on the level geometry: derives the containing cell's
+// faces from (prob_lo, dx) via the shared floor anchor (non-constexpr because
+// of std::floor — the interaction_time/std::log precedent; covered by the
+// runtime selftest rows, not the static_asserts below).
+MCNUX_HOST_DEVICE inline double dt_to_cell_exit(const double x[3],
+                                                const double dxdt[3],
+                                                const double prob_lo[3],
+                                                const double dx[3]) noexcept {
+  using std::floor;
+  double face_lo[3], face_hi[3];
+  for (int d = 0; d < 3; ++d) {
+    // i0 = floor((x - prob_lo)/dx): the CellFluidGather::containing_cell
+    // anchor (mcnux_fluid.hxx), kept as a double so face_lo is computed in
+    // one rounding step per term.
+    const double i0 = floor((x[d] - prob_lo[d]) / dx[d]);
+    face_lo[d] = prob_lo[d] + i0 * dx[d];
+    face_hi[d] = face_lo[d] + dx[d];
+  }
+  return dt_to_cell_exit_faces(x, dxdt, face_lo, face_hi);
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +402,54 @@ constexpr bool competition_table_holds() noexcept {
   return true;
 }
 
+// Exact axis-aligned flat cases of the cell-exit core, on faces with exact
+// binary coordinates, plus the sentinel and composed-competition checks.
+constexpr bool cell_exit_faces_hold() noexcept {
+  const double face_lo[3] = {0.0, 0.0, 0.0};
+  const double face_hi[3] = {1.0, 2.0, 4.0};
+  const double x[3] = {0.25, 1.0, 2.0};
+  // +x toward the upper face: dt = (1 - 0.25)/0.5 = 1.5 exactly.
+  {
+    const double v[3] = {0.5, 0.0, 0.0};
+    if (dt_to_cell_exit_faces(x, v, face_lo, face_hi) != 1.5)
+      return false;
+  }
+  // -y toward the lower face: dt = (0 - 1)/(-0.5) = 2 exactly.
+  {
+    const double v[3] = {0.0, -0.5, 0.0};
+    if (dt_to_cell_exit_faces(x, v, face_lo, face_hi) != 2.0)
+      return false;
+  }
+  // Mixed velocity: per-axis candidates 3 (+x), 4 (-y), 2 (+z); min picks z.
+  {
+    const double v[3] = {0.25, -0.25, 1.0};
+    if (dt_to_cell_exit_faces(x, v, face_lo, face_hi) != 2.0)
+      return false;
+  }
+  // A zero component contributes +inf; the min still picks the finite axis.
+  {
+    const double v[3] = {0.0, 0.0, 1.0};
+    if (dt_to_cell_exit_faces(x, v, face_lo, face_hi) != 2.0)
+      return false;
+  }
+  // All-zero velocity: +inf (legal compete_episode input), never NaN.
+  {
+    const double v[3] = {0.0, 0.0, 0.0};
+    if (dt_to_cell_exit_faces(x, v, face_lo, face_hi) != inf)
+      return false;
+  }
+  // Composed with [MCNX-INT-02]: the produced dt_cell_exit precedes both
+  // channels and dt_rem -> CellExit at exactly that time.
+  {
+    const double v[3] = {0.5, 0.0, 0.0};
+    const EpisodeOutcome o = compete_episode(
+        5.0, 6.0, dt_to_cell_exit_faces(x, v, face_lo, face_hi), 10.0);
+    if (!(o.kind == EpisodeEnd::CellExit && o.dt_event == 1.5))
+      return false;
+  }
+  return true;
+}
+
 // The wrappers are exactly the pinned direct u(S, q, e, k) calls.
 constexpr bool draw_map_wrappers_hold() noexcept {
   const std::uint64_t S = 1296518744ull;
@@ -360,6 +477,10 @@ static_assert(detail::curved_fluid_frame_energy_holds(),
 static_assert(detail::competition_table_holds(),
               "[MCNX-INT-02] episode competition: min rule, strict precedence "
               "over cell-exit/step-end, tie -> scattering, +inf sentinels");
+static_assert(detail::cell_exit_faces_hold(),
+              "cell-exit core: exact axis-aligned flat cases, +inf on zero "
+              "velocity components (never NaN), min over axes, and CellExit "
+              "composition with compete_episode ([MCNX-INT-02])");
 static_assert(detail::draw_map_wrappers_hold(),
               "[MCNX-INT-06] episode_uniforms/scatter_uniforms must be "
               "exactly the pinned u(S, q, e, k) evaluations");

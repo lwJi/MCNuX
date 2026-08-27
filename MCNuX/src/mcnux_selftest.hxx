@@ -106,6 +106,7 @@ void append_fluidgather_rows(Battery &b);    // rows 114..117
 void append_emission_rows(Battery &b);       // rows 118..127
 void append_ledger_closure_rows(Battery &b); // rows 128..133
 void append_emission_bins_rows(Battery &b);  // rows 134..139
+void append_cell_exit_rows(Battery &b);      // rows 140..145
 
 } // namespace MCNuX
 

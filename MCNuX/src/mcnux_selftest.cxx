@@ -231,6 +231,33 @@
 // 139       emission.map.linearity                [MCNX-PKT-03] (u = 0.5 ->
 //                                                 lo + 0.5 * width, bitwise
 //                                                 affine map)
+// 140       int.cellexit.pos_axis_exact           [MCNX-INT-02] (+x toward
+//                                                 the upper face: dt =
+//                                                 (face_hi - x)/v exactly,
+//                                                 production wrapper on the
+//                                                 off-origin fixture)
+// 141       int.cellexit.neg_axis_exact           [MCNX-INT-02] (-y toward
+//                                                 the lower face: dt =
+//                                                 (face_lo - y)/v exactly)
+// 142       int.cellexit.min_axis_exact           [MCNX-INT-02] (mixed
+//                                                 velocity: min over the
+//                                                 three axis candidates,
+//                                                 exact)
+// 143       int.cellexit.zero_velocity_inf        [MCNX-INT-02] (all-zero
+//                                                 velocity -> +inf never
+//                                                 NaN; zero components
+//                                                 contribute +inf, finite
+//                                                 axis still wins)
+// 144       int.cellexit.on_face_zero             [MCNX-INT-02] (half-open
+//                                                 convention: on the lower
+//                                                 face moving -x -> dt = 0,
+//                                                 immediate CellExit in
+//                                                 compete_episode)
+// 145       int.cellexit.rk4_face_crossing        [MCNX-INT-02] (one flat
+//                                                 RK4 step of exactly
+//                                                 dt_to_cell_exit lands on
+//                                                 the predicted face,
+//                                                 machine tier)
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -348,6 +375,16 @@ void run_battery(Battery &b) {
   // specs/packet-representation-and-sampling.md through the
   // mcnux_emission.hxx pure functions on pinned deterministic fixtures.
   append_emission_bins_rows(b);
+
+  // Rows 140..145 — the cell-exit-time helper feeding compete_episode's
+  // dt_cell_exit ([MCNX-INT-02] of specs/neutrino-matter-interactions.md;
+  // the algorithm itself is implementation freedom, the documented half-open
+  // convention is what these rows pin) through the mcnux_interactions.hxx
+  // pure functions: exact axis-aligned flat cases on the off-origin fixture
+  // geometry, the +inf zero-velocity sentinel, the on-lower-face -> dt = 0
+  // immediate CellExit, and machine-tier agreement of an RK4-stepped flat
+  // boundary crossing with the independently predicted face.
+  append_cell_exit_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.
