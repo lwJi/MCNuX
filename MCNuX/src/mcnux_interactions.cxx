@@ -1,12 +1,12 @@
 // The runtime episode driver of specs/neutrino-matter-interactions.md
-// [MCNX-INT-01/02/04/05/06] (scattering-only increment): per packet and per
-// transport step, a sequence of sampling episodes — interaction-time draws
-// against the cell-exit time and the step remainder — with elastic
-// scattering applied at fixed fluid-frame energy nu through the pinned
-// tetrad transform, the scattering momentum exchange deposited into the
-// episode cell ([MCNX-HYD-02] via the shared C2 helper), and the identical
-// pre-negation deltas accumulated into the per-step event-side audit
-// ([MCNX-HYD-05]).
+// [MCNX-INT-01/02/03/04/05/06]: per packet and per transport step, a
+// sequence of sampling episodes — interaction-time draws against the
+// cell-exit time and the step remainder — with elastic scattering applied at
+// fixed fluid-frame energy nu through the pinned tetrad transform,
+// absorption removing the packet whole, every event's momentum/lepton
+// exchange deposited into the episode cell ([MCNX-HYD-02] via the shared C2
+// helper), and the identical pre-negation deltas accumulated into the
+// per-step event-side audit ([MCNX-HYD-05]).
 //
 // All episode math is the already-verified pure functions of
 // mcnux_interactions.hxx / mcnux_tetrad.hxx / mcnux_fluid.hxx /
@@ -31,11 +31,19 @@
 //     geodesic_step, which re-gathers per stage as [MCNX-GEO-03] requires).
 //   * Ties resolve to scattering (structural inside compete_episode).
 //
-// Scattering-only placeholder: an Absorb outcome ends the packet's step with
-// NO deposit and NO removal — the [MCNX-INT-03] removal machinery is a later
-// task. The channel draws are consumed either way, so the [MCNX-INT-06]
-// audit trace stays exact; benchmarks keep the absorption channel
-// transparent (kappa_a = 0 -> Dt_a = +inf) until removal lands.
+// Absorption ([MCNX-INT-03]): an Absorb outcome deposits the packet's FULL
+// content (absorption_delta — no weight decay, the packet dies whole) and
+// removes the packet: make_invalid clears the idcpu validity bit and the
+// unconditional per-patch Redistribute() after the tile walk compacts the
+// slot away. The id VALUE is retired per [MCNX-GPU-04] — AMReX's
+// ParticleType::NextID() is monotonic and never rewinds, so a removed
+// packet's id is never reissued (the storage slot is reused by compaction;
+// the id value is what the contract covers).
+//
+// This file also owns MCNuX_IdContractCheck (parameter-gated by
+// MCNuX::test_id_contract): the runtime [MCNX-GPU-04] id-contract guard over
+// creation + removal — live logical keys pairwise distinct, ids in range,
+// bit 63 of the logical key clear, no retired key ever reappears.
 
 #include "mcnux_gather.hxx" // does the CarpetX driver.hxx relative include
 
@@ -62,6 +70,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <set>
 #include <vector>
 
 namespace MCNuX {
@@ -109,11 +118,13 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
   const SourceGroups sgroups = source_groups();
 
   // Per-step event-side audit ([MCNX-HYD-05]): 10 device accumulator slots
-  // (net dPt..dL; gross |dPt|..|dL|) plus three counters for the log line
-  // (scattering events, episodes, max episodes of any one packet — the
-  // near-cap observable). Step-reset here.
+  // (net dPt..dL; gross |dPt|..|dL| — shared by the scattering AND
+  // absorption channels, correct per the per-cell episode framing) plus
+  // four counters for the log line (scattering events, episodes, max
+  // episodes of any one packet — the near-cap observable — and absorption
+  // events). Step-reset here.
   interaction_step_audit() = LedgerAudit{};
-  amrex::Gpu::DeviceVector<double> audit_dev(13, 0.0);
+  amrex::Gpu::DeviceVector<double> audit_dev(14, 0.0);
   double *const audit_ptr = audit_dev.data();
 
   for_each_packet_tile_raw([&](const CarpetX::GHExt::PatchData &patchdata,
@@ -271,10 +282,32 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
         if (out.kind == EpisodeEnd::CellExit)
           continue; // new episode, undrawn remainder discarded
         if (out.kind == EpisodeEnd::Absorb) {
-          // Scattering-only placeholder for [MCNX-INT-03] (a later task):
-          // no deposit, no removal — the packet simply ends its step here.
-          // The channel draws were already consumed, so the [MCNX-INT-06]
-          // trace stays exact when removal lands.
+          // Absorption ([MCNX-INT-03]): deposit the packet's FULL content
+          // (-N p^t, -N p_i, -l_s N via absorption_delta — no weight decay,
+          // the packet dies whole) into the EPISODE cell with the identical
+          // (dV, dt) pair, mirror the pre-negation delta into the audit,
+          // then remove the packet: make_invalid clears the idcpu validity
+          // bit and the unconditional Redistribute() below compacts the
+          // slot away ([MCNX-GPU-04]: the id VALUE is retired — NextID()
+          // never rewinds, so it is never reissued). p[0..2] are the
+          // event-time momenta with the FROZEN episode p^t (the
+          // frozen-kinematics convention). Both channel draws were already
+          // consumed above, so the [MCNX-INT-06] trace stays exact.
+          const LedgerDelta d =
+              absorption_delta(s, N, pt_up, p[0], p[1], p[2]);
+          deposit_delta(views, ic[0], ic[1], ic[2], d, dV, dt_step);
+          amrex::Gpu::Atomic::AddNoRet(&audit_ptr[0], d.dPt);
+          amrex::Gpu::Atomic::AddNoRet(&audit_ptr[1], d.dPx);
+          amrex::Gpu::Atomic::AddNoRet(&audit_ptr[2], d.dPy);
+          amrex::Gpu::Atomic::AddNoRet(&audit_ptr[3], d.dPz);
+          amrex::Gpu::Atomic::AddNoRet(&audit_ptr[4], d.dL);
+          amrex::Gpu::Atomic::AddNoRet(&audit_ptr[5], detail::cabs(d.dPt));
+          amrex::Gpu::Atomic::AddNoRet(&audit_ptr[6], detail::cabs(d.dPx));
+          amrex::Gpu::Atomic::AddNoRet(&audit_ptr[7], detail::cabs(d.dPy));
+          amrex::Gpu::Atomic::AddNoRet(&audit_ptr[8], detail::cabs(d.dPz));
+          amrex::Gpu::Atomic::AddNoRet(&audit_ptr[9], detail::cabs(d.dL));
+          amrex::Gpu::Atomic::AddNoRet(&audit_ptr[13], 1.0); // absorb count
+          amrex::particle_impl::make_invalid(ptd.m_idcpu[ip]);
           break;
         }
 
@@ -330,7 +363,7 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
     packet_population(patch).Redistribute();
 
   // Fold the device audit into the step accumulator.
-  std::vector<double> audit_host(13, 0.0);
+  std::vector<double> audit_host(14, 0.0);
   amrex::Gpu::copy(amrex::Gpu::deviceToHost, audit_dev.begin(), audit_dev.end(),
                    audit_host.begin());
   LedgerAudit &audit = interaction_step_audit();
@@ -340,17 +373,113 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
                             audit_host[8], audit_host[9]};
 
   CCTK_VINFO("MCNuX episode driver: %ld episodes, %ld scattering events, "
-             "max %ld episodes/packet (cap %d)",
-             long(audit_host[11]), long(audit_host[10]), long(audit_host[12]),
-             max_episodes_per_step);
+             "%ld absorption events, max %ld episodes/packet (cap %d)",
+             long(audit_host[11]), long(audit_host[10]), long(audit_host[13]),
+             long(audit_host[12]), max_episodes_per_step);
 
   // Refresh the per-packet golden table when the synthetic fixture is the
-  // population (the `interactions-fixedseed` benchmark; rows keyed
-  // id - 1, SIZE cross-checked inside). Production populations get their
-  // own diagnostics elsewhere (MCNuX_EmissionDiag).
+  // population (the `interactions-fixedseed`/`absorb-smoke` benchmarks; rows
+  // keyed id - 1, SIZE cross-checked inside). It runs AFTER the
+  // Redistribute() above (preserve that ordering): the table is zeroed then
+  // filled from live packets only, so an absorbed packet's row reverting to
+  // all-zero is the built-in discrete-removal observable. Production
+  // populations get their own diagnostics elsewhere (MCNuX_EmissionDiag).
   if (test_synthetic_packets)
     fill_packet_diag(mgroups, {pk_x, pk_y, pk_z, pk_px, pk_py, pk_pz, pk_pt},
                      packet_diag_size());
+}
+
+// ---------------------------------------------------------------------------
+// Runtime id-contract check  [MCNX-GPU-04]
+// ---------------------------------------------------------------------------
+// Parameter-gated verification scaffolding (MCNuX::test_id_contract; the
+// `absorb-smoke` benchmark): once per transport step, after the episode
+// driver (removal) — and generically covering creation too — sample every
+// live packet's id and assert the [MCNX-GPU-04] contract. A hard-abort
+// guard (CCTK_VERROR on any violation), no golden artifact.
+//
+// Bit-63 reading (decided here, the mcnux_emission.hxx precedent): the RAW
+// AMReX idcpu word has bit 63 SET on every live particle by construction —
+// it is AMReX's validity flag (pack_id, amrex/Src/Particle/AMReX_Particle.H)
+// — so the Verification bullet "bit 63 clear" of
+// specs/particle-container-and-gpu.md is testable only on the REPACKED
+// logical key q = (cpu << 39) | id, exactly the packet_rng_key packing that
+// the RNG already uses for the same reason. The check therefore samples ids
+// (never storage-slot indices), repacks, and asserts on the logical key.
+//
+// Rank-local by construction (the harness runs NPROCS 1); the function-static
+// sets persist across the run, which is what makes "no retired id ever
+// reappears" checkable over the whole run.
+extern "C" void MCNuX_IdContractCheck(CCTK_ARGUMENTS) {
+  DECLARE_CCTK_ARGUMENTS_MCNuX_IdContractCheck;
+  DECLARE_CCTK_PARAMETERS;
+
+  require_driver();
+
+  // Gather every live packet's raw idcpu word to the host (tile SoA vectors
+  // live in device memory on a GPU build).
+  std::vector<std::uint64_t> raw;
+  for_each_packet_tile_raw([&](const CarpetX::GHExt::PatchData &,
+                               const CarpetX::GHExt::PatchData::LevelData &,
+                               PacketContainer &, const PacketIter &pti) {
+    const auto &idcpu =
+        pti.GetParticleTile().GetStructOfArrays().GetIdCPUData();
+    const std::size_t n0 = raw.size();
+    raw.resize(n0 + idcpu.size());
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost, idcpu.begin(), idcpu.end(),
+                     raw.begin() + n0);
+  });
+  amrex::Gpu::streamSynchronize();
+
+  static std::set<std::uint64_t> ever_live; // every logical key ever seen
+  static std::set<std::uint64_t> retired;   // keys that have vanished
+  static std::set<std::uint64_t> prev_live; // live keys at the last check
+
+  std::set<std::uint64_t> live;
+  for (const std::uint64_t word : raw) {
+    // Raw-word validity: after the driver's Redistribute() (default
+    // remove_negative = true) no invalidated slot may survive in the tiles.
+    if (!(word >> 63))
+      CCTK_VERROR("[MCNX-GPU-04] id contract: an INVALID packet slot "
+                  "(idcpu = 0x%llx) survived Redistribute()",
+                  static_cast<unsigned long long>(word));
+    const long long id = amrex::particle_impl::unpack_id(word);
+    const int cpu = amrex::particle_impl::unpack_cpu(word);
+    if (id < 1 || id > (1ll << 39) - 3)
+      CCTK_VERROR("[MCNX-GPU-04] id contract: packet id %lld outside "
+                  "[1, 2^39 - 3]",
+                  id);
+    if (cpu < 0 || cpu >= (1 << 24))
+      CCTK_VERROR("[MCNX-GPU-04] id contract: packet cpu %d outside "
+                  "[0, 2^24)",
+                  cpu);
+    const std::uint64_t q = packet_rng_key(static_cast<std::uint64_t>(id),
+                                           static_cast<std::uint64_t>(cpu));
+    if (q >> 63)
+      CCTK_VERROR("[MCNX-GPU-04] id contract: logical key 0x%llx has "
+                  "bit 63 set",
+                  static_cast<unsigned long long>(q));
+    if (!live.insert(q).second)
+      CCTK_VERROR("[MCNX-GPU-04] id contract: duplicate live packet id "
+                  "%lld (cpu %d)",
+                  id, cpu);
+    if (retired.count(q))
+      CCTK_VERROR("[MCNX-GPU-04] id contract: retired packet id %lld "
+                  "(cpu %d) reappeared",
+                  id, cpu);
+    ever_live.insert(q);
+  }
+
+  // Keys live at the last check but absent now have been removed: their id
+  // values are retired for the rest of the run.
+  for (const std::uint64_t q : prev_live)
+    if (!live.count(q))
+      retired.insert(q);
+  prev_live = std::move(live);
+
+  CCTK_VINFO("MCNuX id-contract check: %zu live, %zu ever live, %zu retired "
+             "(all [MCNX-GPU-04] assertions passed)",
+             prev_live.size(), ever_live.size(), retired.size());
 }
 
 } // namespace MCNuX

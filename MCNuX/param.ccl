@@ -151,22 +151,37 @@ BOOLEAN enable_emission "Run the production emission/creation loop each transpor
 } "no"
 
 # Episode-driver gate of specs/neutrino-matter-interactions.md
-# [MCNX-INT-01/02/04/05/06]: MCNuX::enable_interactions = yes schedules
+# [MCNX-INT-01/02/03/04/05/06]: MCNuX::enable_interactions = yes schedules
 # MCNuX_EpisodeDriver inside the transport step (the MCNuX_GeodesicPush slot;
 # the plain push is then NOT scheduled — the driver subsumes it), which runs
 # the per-packet sampling-episode loop: interaction-time draws against
 # cell-exit and step-remainder bounds, elastic scattering at fixed
-# fluid-frame energy through the pinned tetrad transform, and the scattering
-# momentum exchange deposited into the source-term variables. Scattering-only
-# in this increment: an absorption outcome ends the packet's step without
-# removal ([MCNX-INT-03] is a later task) — keep kappa_a = 0 in benchmarks.
+# fluid-frame energy through the pinned tetrad transform, absorption
+# removing the packet whole (full-content deposit, retired id, no weight
+# decay), and every event's momentum/lepton exchange deposited into the
+# source-term variables.
 # Off by default and STEERABLE=NEVER, because the routine's scheduling is
 # decided from it at startup. MCNuX_ParamCheck forbids it together with
 # opacity_source = "table" (no table-residency layer yet); it IS compatible
 # with test_synthetic_packets (the fixture is the test population of the
-# `interactions-fixedseed` benchmark).
+# `interactions-fixedseed` and `absorb-smoke` benchmarks).
 
 BOOLEAN enable_interactions "Run the sampling-episode driver (interaction competition + elastic scattering) each transport step" STEERABLE=NEVER
+{
+} "no"
+
+# Runtime id-contract check of specs/particle-container-and-gpu.md
+# [MCNX-GPU-04] (the `absorb-smoke` benchmark): MCNuX::test_id_contract =
+# yes schedules MCNuX_IdContractCheck once per transport step after the
+# episode driver, sampling every live packet's id and asserting the id
+# contract over the whole run — live logical keys pairwise distinct, ids in
+# [1, 2^39 - 3], bit 63 of the repacked logical key (cpu << 39) | id clear,
+# and no retired id value ever reappearing after a removal. Any violation is
+# a hard CCTK_VERROR abort; the check writes no grid data. Off by default —
+# verification scaffolding — and STEERABLE=NEVER, because the routine's
+# scheduling is decided from it at startup.
+
+BOOLEAN test_id_contract "Assert the [MCNX-GPU-04] packet id contract (uniqueness, range, bit 63, no retired-id reuse) every transport step" STEERABLE=NEVER
 {
 } "no"
 
