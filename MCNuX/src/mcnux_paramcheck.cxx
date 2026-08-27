@@ -41,6 +41,16 @@ extern "C" void MCNuX_ParamCheck(CCTK_ARGUMENTS) {
         "loop's RangedTableCoefficients slot has no live table views to "
         "evaluate ([MCNX-OPA-04]). Use the analytic coefficient source, or "
         "disable emission.");
+  // Episode-driver guard (same no-table-residency reason as the emission
+  // guard above; enable_interactions WITH test_synthetic_packets is allowed
+  // — the fixture is the test population of `interactions-fixedseed`).
+  if (enable_interactions && CCTK_EQUALS(opacity_source, "table"))
+    CCTK_VERROR(
+        "MCNuX::enable_interactions = yes requires MCNuX::opacity_source = "
+        "\"analytic\": no table-residency layer exists yet, so the episode "
+        "driver's RangedTableCoefficients slot has no live table views to "
+        "evaluate ([MCNX-OPA-04]). Use the analytic coefficient source, or "
+        "disable interactions.");
   if (enable_emission && test_synthetic_packets)
     CCTK_VERROR(
         "MCNuX::enable_emission = yes is incompatible with "

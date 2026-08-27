@@ -101,27 +101,14 @@ using PacketTileData = PacketContainer::ParticleTileType::ParticleTileDataType;
 PacketContainer &packet_population(int patch);
 int num_packet_patches();
 
-// ---------------------------------------------------------------------------
-// Exemplar tile kernel  [MCNX-GPU-02]
-// ---------------------------------------------------------------------------
-// The execution idiom every per-packet operator follows: one
+// The [MCNX-GPU-02] execution idiom every per-packet operator follows: one
 // amrex::ParallelFor over the particle index of a tile, whose lambda captures
-// only trivially-copyable values by value (here the ParticleTileData view).
+// only trivially-copyable values by value (the ParticleTileData view above).
 // Pattern: amrex/Tests/Particles/SOAParticle/main.cpp
 // (ptd = pti.GetParticleTile().getParticleTileData(); ParallelFor(np, ...)).
-// This exemplar touches every schema component and bumps the event counter;
-// it is compile-only in this increment (no scheduled caller launches it yet).
-inline void exemplar_packet_kernel(PacketTileData ptd, long np) {
-  amrex::ParallelFor(np, [=] AMREX_GPU_DEVICE(long ip) noexcept {
-    const amrex::ParticleReal p2 =
-        ptd.rdata(PIdx::px)[ip] * ptd.rdata(PIdx::px)[ip] +
-        ptd.rdata(PIdx::py)[ip] * ptd.rdata(PIdx::py)[ip] +
-        ptd.rdata(PIdx::pz)[ip] * ptd.rdata(PIdx::pz)[ip];
-    amrex::ignore_unused(p2, ptd.rdata(PIdx::w)[ip],
-                         ptd.idata(IntIdx::species)[ip], ptd.m_idcpu[ip]);
-    ptd.idata(IntIdx::event_counter)[ip] += 1;
-  });
-}
+// The live exemplar is the episode driver MCNuX_EpisodeDriver
+// (mcnux_interactions.cxx); the geodesic push and the emission fill pass
+// (mcnux_geodesic.cxx, mcnux_emission.cxx) follow the same idiom.
 
 // ---------------------------------------------------------------------------
 // Compile-time layout pin  (particle-container-and-gpu.md, Verification)

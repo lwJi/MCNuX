@@ -150,6 +150,26 @@ BOOLEAN enable_emission "Run the production emission/creation loop each transpor
 {
 } "no"
 
+# Episode-driver gate of specs/neutrino-matter-interactions.md
+# [MCNX-INT-01/02/04/05/06]: MCNuX::enable_interactions = yes schedules
+# MCNuX_EpisodeDriver inside the transport step (the MCNuX_GeodesicPush slot;
+# the plain push is then NOT scheduled — the driver subsumes it), which runs
+# the per-packet sampling-episode loop: interaction-time draws against
+# cell-exit and step-remainder bounds, elastic scattering at fixed
+# fluid-frame energy through the pinned tetrad transform, and the scattering
+# momentum exchange deposited into the source-term variables. Scattering-only
+# in this increment: an absorption outcome ends the packet's step without
+# removal ([MCNX-INT-03] is a later task) — keep kappa_a = 0 in benchmarks.
+# Off by default and STEERABLE=NEVER, because the routine's scheduling is
+# decided from it at startup. MCNuX_ParamCheck forbids it together with
+# opacity_source = "table" (no table-residency layer yet); it IS compatible
+# with test_synthetic_packets (the fixture is the test population of the
+# `interactions-fixedseed` benchmark).
+
+BOOLEAN enable_interactions "Run the sampling-episode driver (interaction competition + elastic scattering) each transport step" STEERABLE=NEVER
+{
+} "no"
+
 # Emission diagnostic switch (the `emit-smoke` benchmark): MCNuX::
 # test_emission = yes schedules MCNuX_EmissionDiag after MCNuX_Emission,
 # mirroring the created packet population into the MCNuX::mcnux_packet_diag

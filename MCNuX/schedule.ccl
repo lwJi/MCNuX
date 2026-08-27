@@ -138,7 +138,15 @@ if (test_synthetic_packets)
     READS: ADMBaseX::shift(everywhere)
     WRITES: MCNuX::mcnux_packet_diag(everywhere)
   } "Seed the deterministic synthetic packet fixture"
+}
 
+# The plain push runs only when the episode driver does not: the driver
+# occupies the same slot and subsumes the push (it advances every packet by
+# the full transport dt across its episode segments), so scheduling both
+# would double-push the same packets.
+
+if (test_synthetic_packets && !enable_interactions)
+{
   SCHEDULE MCNuX_GeodesicPush IN MCNuX_TransportStep AFTER MCNuX_ZeroSourceTerms BEFORE MCNuX_AddToSourceTerms
   {
     LANG: C
@@ -149,6 +157,65 @@ if (test_synthetic_packets)
     READS: MCNuX::mcnux_packet_diag(everywhere)
     WRITES: MCNuX::mcnux_packet_diag(everywhere)
   } "Push every packet along its null geodesic over one transport step"
+}
+
+# Episode driver of specs/neutrino-matter-interactions.md
+# [MCNX-INT-01/02/04/05/06] (parameter-gated by MCNuX::enable_interactions;
+# scattering-only in this increment): per packet, a sequence of sampling
+# episodes over one transport step — geodesic segments punctuated by
+# cell crossings and elastic scattering events, with the scattering ledger
+# deltas deposited into the source-term variables. It runs in the
+# GeodesicPush slot (AFTER the zero point, BEFORE the contributor group —
+# the deposit target is zeroed for this step, and packets are pushed before
+# this step's emission appends new ones). Level mode per [MCNX-CTX-03]; the
+# READS: are the union of the push's metric needs and the emission loop's
+# fluid/coefficient needs, plus the self-accumulating pair on the source
+# variables ([MCNX-HYD-03] contributor idiom, here by explicit ordering
+# rather than group membership). Two variants because the per-packet
+# diagnostic table only has storage under test_synthetic_packets (the
+# `interactions-fixedseed` benchmark population); the routine fills it only
+# then.
+
+if (enable_interactions && test_synthetic_packets)
+{
+  SCHEDULE MCNuX_EpisodeDriver IN MCNuX_TransportStep AFTER MCNuX_ZeroSourceTerms BEFORE MCNuX_AddToSourceTerms
+  {
+    LANG: C
+    OPTIONS: level
+    READS: ADMBaseX::metric(everywhere)
+    READS: ADMBaseX::lapse(everywhere)
+    READS: ADMBaseX::shift(everywhere)
+    READS: HydroBaseX::rho(everywhere)
+    READS: HydroBaseX::vel(everywhere)
+    READS: HydroBaseX::temperature(everywhere)
+    READS: HydroBaseX::Ye(everywhere)
+    READS: MCNuX::rad_force(everywhere)
+    READS: MCNuX::lepton_source(everywhere)
+    WRITES: MCNuX::rad_force(everywhere)
+    WRITES: MCNuX::lepton_source(everywhere)
+    READS: MCNuX::mcnux_packet_diag(everywhere)
+    WRITES: MCNuX::mcnux_packet_diag(everywhere)
+  } "Run the per-packet sampling-episode loop (competition + elastic scattering) over one transport step"
+}
+
+if (enable_interactions && !test_synthetic_packets)
+{
+  SCHEDULE MCNuX_EpisodeDriver IN MCNuX_TransportStep AFTER MCNuX_ZeroSourceTerms BEFORE MCNuX_AddToSourceTerms
+  {
+    LANG: C
+    OPTIONS: level
+    READS: ADMBaseX::metric(everywhere)
+    READS: ADMBaseX::lapse(everywhere)
+    READS: ADMBaseX::shift(everywhere)
+    READS: HydroBaseX::rho(everywhere)
+    READS: HydroBaseX::vel(everywhere)
+    READS: HydroBaseX::temperature(everywhere)
+    READS: HydroBaseX::Ye(everywhere)
+    READS: MCNuX::rad_force(everywhere)
+    READS: MCNuX::lepton_source(everywhere)
+    WRITES: MCNuX::rad_force(everywhere)
+    WRITES: MCNuX::lepton_source(everywhere)
+  } "Run the per-packet sampling-episode loop (competition + elastic scattering) over one transport step"
 }
 
 # Fluid-state/four-velocity gather diagnostic of

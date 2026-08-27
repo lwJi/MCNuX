@@ -258,6 +258,24 @@
 //                                                 dt_to_cell_exit lands on
 //                                                 the predicted face,
 //                                                 machine tier)
+// 146       int.scatter.nu_preserved              [MCNX-INT-04] (fluid-frame
+//                                                 energy recomputed from the
+//                                                 redraw output equals the
+//                                                 input nu, curved/boosted
+//                                                 fixture, machine tier)
+// 147       int.scatter.null_closure              [MCNX-GEO-02] (redrawn
+//                                                 momentum satisfies the
+//                                                 null closure, machine)
+// 148       int.scatter.flat_isotropy             [MCNX-INT-04]/[MCNX-PKT-04]
+//                                                 (flat-static limit: output
+//                                                 is exactly nu * n_hat with
+//                                                 cos theta = 2 u1 - 1,
+//                                                 phi = 2 pi u2, bitwise)
+// 149       int.scatter.draw_composition          [MCNX-INT-06] (the
+//                                                 scatter_uniforms k = 2, 3
+//                                                 pair through the redraw vs
+//                                                 direct u(S, q, e, k),
+//                                                 bitwise)
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -385,6 +403,14 @@ void run_battery(Battery &b) {
   // immediate CellExit, and machine-tier agreement of an RK4-stepped flat
   // boundary crossing with the independently predicted face.
   append_cell_exit_rows(b);
+
+  // Rows 146..149 — the elastic scatter redraw of
+  // specs/neutrino-matter-interactions.md [MCNX-INT-04] (new isotropic
+  // fluid-frame direction at FIXED nu through the pinned tetrad transform)
+  // through the mcnux_interactions.hxx scatter_redraw composition on the
+  // curved/boosted tetrad fixture and the flat-static limit, plus the
+  // [MCNX-INT-06] k = 2, 3 draw-composition pin.
+  append_scatter_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.

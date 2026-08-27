@@ -128,6 +128,16 @@ struct LedgerAudit {
 // list; nothing consumes it yet.
 LedgerAudit &emission_step_audit();
 
+// The per-step event-side audit of the episode driver ([MCNX-HYD-05] event
+// side, interaction events): reset and refilled once per transport step by
+// MCNuX_EpisodeDriver (mcnux_interactions.cxx, which defines it) from the
+// SAME pre-negation LedgerDelta values it deposits, with the identical
+// code-unit dV/dt normalization pair. Separate from emission_step_audit()
+// above — the two contributors own their accumulators independently (never
+// mutate the other's). Exposed for the later ledger-closure extension task;
+// nothing consumes it yet.
+LedgerAudit &interaction_step_audit();
+
 // The [MCNX-HYD-05] closure tolerance: relative 1e-13 per step (the
 // specs/README.md conservation tolerance).
 inline constexpr double ledger_rtol = 1e-13;

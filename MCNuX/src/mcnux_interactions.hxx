@@ -289,6 +289,28 @@ constexpr ScatterUniforms scatter_uniforms(std::uint64_t S, std::uint64_t q,
 }
 
 // ---------------------------------------------------------------------------
+// Elastic scatter redraw  [MCNX-INT-04]
+// ---------------------------------------------------------------------------
+
+// The outgoing coordinate-frame momentum of an elastic scattering event: a
+// NEW isotropic fluid-frame direction from the two already-drawn uniforms
+// (u1, u2) — k = 2, 3 of the episode draw map above, via scatter_uniforms —
+// at the FIXED fluid-frame energy nu, through the SAME pinned tetrad
+// transform as packet creation ([MCNX-INT-04]: "the same pinned tetrad
+// transform"; fluid_frame_direction then transform_to_coordinate_frame of
+// mcnux_tetrad.hxx, the exact chain of the emission creation path). The
+// tetrad, metric, and nu are the FROZEN episode-start kinematics (spec
+// deviation above): the caller evaluates them once per episode and passes
+// them here — this function re-derives nothing. Non-constexpr
+// (fluid_frame_direction's sqrt/sin/cos); the explicit-direction composition
+// is asserted below, the drawn path by the runtime selftest rows 146..149.
+MCNUX_HOST_DEVICE inline CoordinateMomentum
+scatter_redraw(const Tetrad &t, const SpacetimeMetric &m, double nu, double u1,
+               double u2) noexcept {
+  return transform_to_coordinate_frame(t, m, nu, fluid_frame_direction(u1, u2));
+}
+
+// ---------------------------------------------------------------------------
 // Compile-time verification (the constexpr half of the T18a-core test
 // surface; the std::log draw path is runtime-only and lives in the
 // `unit-selftest` battery rows 106..113)
@@ -450,6 +472,40 @@ constexpr bool cell_exit_faces_hold() noexcept {
   return true;
 }
 
+// [MCNX-INT-04] the redraw composition preserves nu: on the pinned curved
+// fixture (the curved_fluid_frame_energy_holds inputs), the fluid-frame
+// energy recomputed from the transformed momentum — with the SAME u^mu and
+// metric — equals the input nu at machine tier, and the transformed p^t
+// satisfies the [MCNX-GEO-02] null closure. Constexpr via csqrt and an
+// EXPLICIT exact unit direction (the drawn fluid_frame_direction path is
+// runtime-only; scatter_redraw is exactly this composition preceded by it).
+constexpr bool scatter_composition_preserves_nu() noexcept {
+  const double alpha = 1.1;
+  const double beta_up[3] = {0.1, -0.05, 0.2};
+  const SpatialMetric gamma{1.3, 0.12, -0.05, 1.7, 0.08, 1.1};
+  const SpacetimeMetric m = spacetime_metric_from_adm(alpha, beta_up, gamma);
+
+  // Normalized fluid four-velocity from an arbitrary timelike seed.
+  const double w[4] = {1.0, 0.2, -0.1, 0.15};
+  const double n = csqrt(-metric_dot(m, w, w));
+  const double u_up[4] = {w[0] / n, w[1] / n, w[2] / n, w[3] / n};
+
+  const Tetrad t =
+      build_tetrad_with(m, u_up, [](double v) { return csqrt(v); });
+  const double nu = 3.25;
+  const UnitVector3 nhat{0.6, 0.0, 0.8}; // exactly unit: 0.36 + 0.64 = 1
+  const CoordinateMomentum cm = transform_to_coordinate_frame(t, m, nu, nhat);
+
+  const double p_cov[3] = {cm.px, cm.py, cm.pz};
+  const double nu_back = fluid_frame_energy(alpha, beta_up, p_cov, cm.pt, u_up);
+
+  const InverseSpatialMetric gu = spatial_metric_inverse(gamma);
+  const double pt_closed = p_t_closure_with(cm.px, cm.py, cm.pz, gu, alpha,
+                                            [](double v) { return csqrt(v); });
+  return approx_eq(nu_back, nu, rtol_machine) &&
+         approx_eq(pt_closed, cm.pt, rtol_machine);
+}
+
 // The wrappers are exactly the pinned direct u(S, q, e, k) calls.
 constexpr bool draw_map_wrappers_hold() noexcept {
   const std::uint64_t S = 1296518744ull;
@@ -481,6 +537,11 @@ static_assert(detail::cell_exit_faces_hold(),
               "cell-exit core: exact axis-aligned flat cases, +inf on zero "
               "velocity components (never NaN), min over axes, and CellExit "
               "composition with compete_episode ([MCNX-INT-02])");
+static_assert(detail::scatter_composition_preserves_nu(),
+              "[MCNX-INT-04] the elastic-redraw composition (tetrad "
+              "transform at fixed nu) must preserve the fluid-frame energy "
+              "and satisfy the null closure on the pinned curved fixture "
+              "(machine tier)");
 static_assert(detail::draw_map_wrappers_hold(),
               "[MCNX-INT-06] episode_uniforms/scatter_uniforms must be "
               "exactly the pinned u(S, q, e, k) evaluations");
