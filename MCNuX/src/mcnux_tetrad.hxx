@@ -241,9 +241,10 @@ constexpr Tetrad build_tetrad_with(const SpacetimeMetric &m, const double u[4],
 
 // Production tetrad construction from the ADM pieces and the (normalized)
 // fluid four-velocity. Pure: rebuilt from its arguments at every call.
-inline Tetrad build_tetrad(double alpha, const double beta_up[3],
-                           const SpatialMetric &gamma,
-                           const double u[4]) noexcept {
+MCNUX_HOST_DEVICE inline Tetrad build_tetrad(double alpha,
+                                             const double beta_up[3],
+                                             const SpatialMetric &gamma,
+                                             const double u[4]) noexcept {
   return build_tetrad_with(spacetime_metric_from_adm(alpha, beta_up, gamma), u,
                            [](double x) { return std::sqrt(x); });
 }
@@ -262,7 +263,8 @@ struct UnitVector3 {
 // (packet-representation-and-sampling.md:123-126). The uniforms are plain
 // ARGUMENTS: this function performs no RNG call, so the per-consumer
 // (e, k) draw maps stay auditable at the call sites.
-inline UnitVector3 fluid_frame_direction(double u1, double u2) noexcept {
+MCNUX_HOST_DEVICE inline UnitVector3 fluid_frame_direction(double u1,
+                                                           double u2) noexcept {
   const double costheta = 2.0 * u1 - 1.0;
   const double sintheta = std::sqrt(1.0 - costheta * costheta);
   const double phi = 2.0 * detail::pi * u2;

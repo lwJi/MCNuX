@@ -113,7 +113,10 @@ void append_coefficient_rows(Battery &b) {
   // (Species, double E_MeV, const FluidState&) -> Coefficients: a smooth
   // function of all three inputs that cannot coincide with the analytic
   // triple (its kappa_a carries the species index and rho).
-  const auto table = [](Species s, double E, const FluidState &st) {
+  // Host+device so the (host+device) evaluate_coefficients instantiation
+  // compiles warning-free under nvcc/hipcc.
+  const auto table = [] MCNUX_HOST_DEVICE(Species s, double E,
+                                          const FluidState &st) {
     const double k = 1.0 + species_index(s);
     return Coefficients{k * 1e-3 * st.rho_cgs, k * 2e-4 * E * st.Ye,
                         k * 7.0 * st.T_MeV * E};
