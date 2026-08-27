@@ -31,6 +31,24 @@ extern "C" void MCNuX_ParamCheck(CCTK_ARGUMENTS) {
         "under subcycling is unspecified (see the open question of "
         "specs/carpetx-thorn-integration.md [MCNX-CTX-06]). Set "
         "CarpetX::use_subcycling = no, or deactivate the MCNuX thorn.");
+
+  // Emission-loop guards ([MCNX-CTX-06] pattern: abort at PARAMCHECK, before
+  // any evolution, in exactly the configurations the loop cannot yet serve).
+  if (enable_emission && CCTK_EQUALS(opacity_source, "table"))
+    CCTK_VERROR(
+        "MCNuX::enable_emission = yes requires MCNuX::opacity_source = "
+        "\"analytic\": no table-residency layer exists yet, so the emission "
+        "loop's RangedTableCoefficients slot has no live table views to "
+        "evaluate ([MCNX-OPA-04]). Use the analytic coefficient source, or "
+        "disable emission.");
+  if (enable_emission && test_synthetic_packets)
+    CCTK_VERROR(
+        "MCNuX::enable_emission = yes is incompatible with "
+        "MCNuX::test_synthetic_packets = yes: the synthetic fixture seeds "
+        "hard-coded packet ids 1..8 without touching the AMReX id counter, so "
+        "production packets created by the emission loop would collide with "
+        "them ([MCNX-GPU-04] id uniqueness, "
+        "specs/particle-container-and-gpu.md).");
 }
 
 } // namespace MCNuX

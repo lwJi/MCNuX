@@ -26,7 +26,7 @@ Headers:
 - `mcnux_opacity.hxx` — WeakLibInterp call-boundary wrappers.
 - `mcnux_tetrad.hxx` — inverse metric, null closure, tetrad construction.
 - `mcnux_trp.hxx` — trapped-regime opacity relabeling map.
-- `mcnux_srcterms.hxx` — exchange-ledger arithmetic.
+- `mcnux_srcterms.hxx` — exchange-ledger arithmetic + closure audit (`LedgerAudit`/`ledger_closure`, shared `synthfix` synthetic event list).
 - `mcnux_coefficients.hxx` — source-agnostic coefficient interface, analytic Kirchhoff-form formulas, table-vs-analytic dispatch.
 - `mcnux_table_coeffs.hxx` — baseline table-source coefficient assembly + νx dataset mapping.
 - `mcnux_table_range.hxx` — table-range policy: clamping with counters, table-derived transparency floor, `RangedTableCoefficients` wrapper.
@@ -35,14 +35,17 @@ Headers:
 - `mcnux_emission.hxx` — emission pure functions: count law with floor/Bernoulli remainder, bin-center energy/weight, `K_cell` packing + capacity guard, creation RNG draw map (`draw_k_creation_*`), bin-integrated-eta bridge.
 - `mcnux_fluid.hxx` — cell-centered HydroBaseX fluid-state gather (`CellFluidGather`/`FluidSample`, containing-cell, no sub-cell interpolation) + Valencia v^i→u^μ lift.
 - `mcnux_stats.hxx` — 4σ statistical-acceptance reduction; pinned seed and packet-count constants.
+- `mcnux_gather.hxx` — shared runtime gather/walk helpers (metric/hydro group lookups, `make_gather`/`make_fluid_gather`, `for_each_packet_tile[_raw]`, shared `fill_packet_diag`); does the CarpetX `driver.hxx` relative include itself.
+- `mcnux_deposit.hxx` — shared atomic source-term deposition ([MCNX-GPU-02] idiom): `SourceViews` + `deposit_delta` via `Gpu::Atomic::AddNoRet`.
 
 Compiled sources:
 
 - `mcnux_paramcheck.cxx` — subcycling guard.
 - `mcnux_cadence.cxx` — transport cadence group.
 - `mcnux_coefficients.cxx` — parameter glue: coefficient-source selection and analytic params from `param.ccl` arrays.
-- `mcnux_srcterms.cxx` — source-term zeroing + synthetic-deposit contributor.
+- `mcnux_srcterms.cxx` — source-term zeroing + synthetic-deposit contributor + `MCNuX_LedgerClosure` diagnostic (rank-local unigrid `amrex::ReduceSum` grid reduction, gated `test_ledger_closure`, writes `mcnux_ledger_diag`).
 - `mcnux_geodesic.cxx` — runtime packet-population owner (lazy per-patch containers), synthetic-packet seeding fixture, geodesic push scheduled `IN MCNuX_TransportStep`, fluid-gather diagnostic routine (`MCNuX_FluidGatherDiag`, gated `test_fluid_gather`).
+- `mcnux_emission.cxx` — runtime emission/creation loop (`MCNuX_Emission`, gated `enable_emission`, IN MCNuX_AddToSourceTerms): count pass → id reservation → SoA append fill pass, C2 deposit + `emission_step_audit()` owner, analytic fixture energy grid, emission diag routine (gated `test_emission`).
 - `mcnux_selftest.cxx` / `mcnux_selftest.hxx` / `mcnux_selftest_<domain>.cxx` — runtime selftest battery: core row table and ordered appender sequence in the first, shared machinery and appender declarations in the header, check code in the per-domain files.
 - `stub.cxx` — compile-time selftest aggregation point.
 
@@ -62,7 +65,7 @@ Compiled sources:
 
 ## Testing
 
-- `MCNuX/test/` is the Cactus test home: `test.ccl` (`NPROCS 1`), `<name>.par` parfiles, `<name>/` golden dirs. Current tests: `unit-selftest`, `source-zero-add`, `minkowski-freestream`, `schwarzschild-id`, `hydro-sphere-id`, `hydro-sphere-gather`.
+- `MCNuX/test/` is the Cactus test home: `test.ccl` (`NPROCS 1`), `<name>.par` parfiles, `<name>/` golden dirs. Current tests: `unit-selftest`, `source-zero-add`, `minkowski-freestream`, `schwarzschild-id`, `hydro-sphere-id`, `hydro-sphere-gather`, `emit-smoke`.
 - Golden TSVs are copied verbatim from sandbox harness runs, never hand-authored. Harness discovery: a `test/<name>.par` is only runnable once its golden dir `test/<name>/` exists; the first run against an empty golden dir is the capture step (vacuous "0 files identical").
 - Parfile requirements: every MCNuX parfile needs `Cactus::presync_mode = "mixed-error"` and both `ADMBaseX` and `HydroBaseX` in `ActiveThorns` (MCNuX `INHERITS: ADMBaseX HydroBaseX`); runs that read the metric also need `ODESolvers` active (ADMBaseX initial data is scheduled only `IN ODESolvers_Initial`).
 - CarpetX/AMReX rejects domains < 8 cells per direction (blocking_factor); off-origin test boxes must set `IO::out_{x,y,z}line_*` inside the domain.

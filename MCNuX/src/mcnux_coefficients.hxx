@@ -105,7 +105,8 @@ enum class CoefficientSource : int { Table = 0, Analytic = 1 };
 //   c * 4 pi E^3/(hc)^3 * 1/(exp(E/T) + 1)     [MeV cm^-2 s^-1 MeV^-1],
 // i.e. c times the equilibrium spectral energy density J_eq(E) at occupancy
 // f_eq = 1/(exp(E/T) + 1). Not constexpr (std::exp).
-inline double kirchhoff_eta_over_kappa_a(double E_MeV, double T_MeV) noexcept {
+MCNUX_HOST_DEVICE inline double
+kirchhoff_eta_over_kappa_a(double E_MeV, double T_MeV) noexcept {
   const double f_eq = 1.0 / (std::exp(E_MeV / T_MeV) + 1.0);
   return c_cgs * 4.0 * detail::pi * (E_MeV * E_MeV * E_MeV) /
          (hc_MeV_cm * hc_MeV_cm * hc_MeV_cm) * f_eq;
@@ -124,9 +125,9 @@ constexpr double analytic_kappa_s(const AnalyticOpacityParams &p,
 
 // The analytic coefficient triple, verification-suite-design.md:213-217
 // verbatim.
-inline Coefficients analytic_coefficients(const AnalyticOpacityParams &p,
-                                          Species s, double E_MeV,
-                                          double T_MeV) noexcept {
+MCNUX_HOST_DEVICE inline Coefficients
+analytic_coefficients(const AnalyticOpacityParams &p, Species s, double E_MeV,
+                      double T_MeV) noexcept {
   const double ka = analytic_kappa_a(p, s);
   return {ka, analytic_kappa_s(p, s),
           p.eta_scale[species_index(s)] * ka *
@@ -143,10 +144,10 @@ inline Coefficients analytic_coefficients(const AnalyticOpacityParams &p,
 // (the [MCNX-OPA-04] assembly, a later task); it is only invoked under
 // CoefficientSource::Table. The analytic leg reads only st.T_MeV.
 template <class TableEval>
-inline Coefficients evaluate_coefficients(CoefficientSource src,
-                                          const AnalyticOpacityParams &ap,
-                                          TableEval &&table, Species s,
-                                          double E_MeV, const FluidState &st) {
+MCNUX_HOST_DEVICE inline Coefficients
+evaluate_coefficients(CoefficientSource src, const AnalyticOpacityParams &ap,
+                      TableEval &&table, Species s, double E_MeV,
+                      const FluidState &st) {
   if (src == CoefficientSource::Analytic)
     return analytic_coefficients(ap, s, E_MeV, st.T_MeV);
   return table(s, E_MeV, st);

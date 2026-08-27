@@ -16,11 +16,12 @@
 // CarpetX invokes such a routine exactly once per traversal — and walk the
 // patches, levels, and particle tiles themselves.
 
-// TODO: Don't include files from other thorns; create a proper interface
-//
-// The same relative include as mcnux_cadence.cxx (see the rationale there):
-// CarpetX exposes no public capability header for `ghext`.
-#include "../../../CarpetX/CarpetX/src/driver.hxx"
+// The driver-access plumbing (require_driver, group lookups, gather
+// constructors, tile walkers, the diagnostic-table declaration) lives in
+// mcnux_gather.hxx (the shared C1 factoring; it performs the CarpetX
+// relative include of driver.hxx itself). This file remains the owner of
+// the packet population and of the fill_packet_diag definition.
+#include "mcnux_gather.hxx"
 
 #include "mcnux_fluid.hxx"
 #include "mcnux_geodesic.hxx"
@@ -48,15 +49,6 @@ namespace MCNuX {
 // ---------------------------------------------------------------------------
 
 namespace {
-
-void require_driver() {
-  if (!CarpetX::ghext)
-    CCTK_VERROR("MCNuX reached a packet operator, but the CarpetX driver "
-                "singleton `ghext` is null. MCNuX accesses grid data and the "
-                "particle hierarchy through the driver's native AMReX objects "
-                "(specs/carpetx-thorn-integration.md [MCNX-CTX-01]) and cannot "
-                "run without them.");
-}
 
 // One container per patch, constructed lazily on the patch's ParGDB
 // (amrex::ParticleContainer_impl(ParGDBBase*) is the only inherited
@@ -90,146 +82,20 @@ PacketContainer &packet_population(const int patch) {
   return *slot;
 }
 
-namespace {
-
-// ---------------------------------------------------------------------------
-// Metric access
-// ---------------------------------------------------------------------------
-
-struct MetricGroups {
-  int metric, lapse, shift;
-};
-
-MetricGroups metric_groups() {
-  MetricGroups g{CCTK_GroupIndex("ADMBaseX::metric"),
-                 CCTK_GroupIndex("ADMBaseX::lapse"),
-                 CCTK_GroupIndex("ADMBaseX::shift")};
-  if (g.metric < 0 || g.lapse < 0 || g.shift < 0)
-    CCTK_VERROR("MCNuX geodesic push needs the ADMBaseX metric, lapse, and "
-                "shift groups (specs/geodesic-propagation.md, Source of "
-                "truth); is ADMBaseX active?");
-  return g;
-}
-
-// The four HydroBaseX groups of the fluid-state gather
-// (specs/neutrino-matter-interactions.md [MCNX-INT-05]; vel is the only
-// multi-member group). Mirrors metric_groups().
-struct HydroGroups {
-  int rho, vel, temperature, ye;
-};
-
-HydroGroups hydro_groups() {
-  HydroGroups g{CCTK_GroupIndex("HydroBaseX::rho"),
-                CCTK_GroupIndex("HydroBaseX::vel"),
-                CCTK_GroupIndex("HydroBaseX::temperature"),
-                CCTK_GroupIndex("HydroBaseX::Ye")};
-  if (g.rho < 0 || g.vel < 0 || g.temperature < 0 || g.ye < 0)
-    CCTK_VERROR("MCNuX fluid-state gather needs the HydroBaseX rho, vel, "
-                "temperature, and Ye groups "
-                "(specs/neutrino-matter-interactions.md [MCNX-INT-05]); is "
-                "HydroBaseX active?");
-  return g;
-}
-
-using PacketIter = amrex::ParIterSoA<PIdx::nattribs, IntIdx::nattribs>;
-
-// The gather functor for one particle tile: the ADMBaseX views of the tile's
-// box (CarpetX builds the group MultiFabs on the AmrCore's BoxArray and
-// DistributionMapping — the ones the ParGDB tracks — so the particle
-// iterator's box index addresses the matching fab) plus the level geometry.
-VertexMetricGather
-make_gather(const CarpetX::GHExt::PatchData &patchdata,
-            const CarpetX::GHExt::PatchData::LevelData &leveldata,
-            const MetricGroups &groups, const PacketIter &pti) {
-  constexpr int tl = 0;
-  const int box = pti.index();
-  VertexMetricGather gather{};
-  gather.metric = leveldata.groupdata.at(groups.metric)->mfab.at(tl)->array(box);
-  gather.lapse = leveldata.groupdata.at(groups.lapse)->mfab.at(tl)->array(box);
-  gather.shift = leveldata.groupdata.at(groups.shift)->mfab.at(tl)->array(box);
-  const amrex::Geometry &geom = patchdata.amrcore->Geom(leveldata.level);
-  for (int d = 0; d < 3; ++d) {
-    gather.prob_lo[d] = geom.ProbLo(d);
-    gather.dx[d] = geom.CellSize(d);
-  }
-  return gather;
-}
-
-// The fluid-gather functor for one particle tile: the four HydroBaseX ccc
-// views of the tile's box plus the level geometry (same box-index reasoning
-// as make_gather above).
-CellFluidGather
-make_fluid_gather(const CarpetX::GHExt::PatchData &patchdata,
-                  const CarpetX::GHExt::PatchData::LevelData &leveldata,
-                  const HydroGroups &groups, const PacketIter &pti) {
-  constexpr int tl = 0;
-  const int box = pti.index();
-  CellFluidGather gather{};
-  gather.rho = leveldata.groupdata.at(groups.rho)->mfab.at(tl)->array(box);
-  gather.vel = leveldata.groupdata.at(groups.vel)->mfab.at(tl)->array(box);
-  gather.temperature =
-      leveldata.groupdata.at(groups.temperature)->mfab.at(tl)->array(box);
-  gather.ye = leveldata.groupdata.at(groups.ye)->mfab.at(tl)->array(box);
-  const amrex::Geometry &geom = patchdata.amrcore->Geom(leveldata.level);
-  for (int d = 0; d < 3; ++d) {
-    gather.prob_lo[d] = geom.ProbLo(d);
-    gather.dx[d] = geom.CellSize(d);
-  }
-  return gather;
-}
-
-// Walk every particle tile of the population, raw form:
-// f(patchdata, leveldata, pc, pti) — callers build the gathers they need.
-template <class F> void for_each_packet_tile_raw(F &&f) {
-  for (int patch = 0; patch < num_packet_patches(); ++patch) {
-    const auto &patchdata = CarpetX::ghext->patchdata.at(patch);
-    PacketContainer &pc = packet_population(patch);
-    for (const auto &leveldata : patchdata.leveldata) {
-      const int level = leveldata.level;
-      if (level > pc.finestLevel())
-        break;
-      for (PacketIter pti(pc, level); pti.isValid(); ++pti)
-        f(patchdata, leveldata, pc, pti);
-    }
-  }
-}
-
-// Walk every particle tile of the population: f(pc, level, pti, gather).
-template <class F> void for_each_packet_tile(const MetricGroups &groups, F &&f) {
-  for_each_packet_tile_raw(
-      [&](const CarpetX::GHExt::PatchData &patchdata,
-          const CarpetX::GHExt::PatchData::LevelData &leveldata,
-          PacketContainer &pc, const PacketIter &pti) {
-        f(pc, leveldata.level, pti,
-          make_gather(patchdata, leveldata, groups, pti));
-      });
-}
-
 // ---------------------------------------------------------------------------
 // Diagnostic table  (MCNuX::mcnux_packet_diag)
 // ---------------------------------------------------------------------------
+// The group lookups, gather constructors, and tile walkers used below are
+// the shared ones of mcnux_gather.hxx (C1 factoring — one copy, reused by
+// the emission loop).
 
-// Size of a 1d DISTRIB=CONSTANT diagnostic array as declared in
-// interface.ccl (mcnux_packet_diag, mcnux_fluid_diag).
-int diag_array_size(const char *const group) {
-  const int gi = CCTK_GroupIndex(group);
-  if (gi < 0)
-    CCTK_VERROR("%s is not a known group", group);
-  const CCTK_INT *const *const sizes = CCTK_GroupSizesI(gi);
-  if (!sizes || CCTK_GroupDimI(gi) != 1)
-    CCTK_VERROR("%s must be a 1-dimensional grid array", group);
-  return int(*sizes[0]);
-}
-
-int packet_diag_size() { return diag_array_size("MCNuX::mcnux_packet_diag"); }
-
-struct PacketDiagColumns {
-  CCTK_REAL *x, *y, *z, *px, *py, *pz, *pt;
-};
+namespace {
 
 // Number of doubles per packet in the device staging buffer:
 // id, x, y, z, p_x, p_y, p_z, p_t.
 constexpr int diag_width = 8;
+
+} // namespace
 
 // Fill the diagnostic table from the current population: row = packet id - 1
 // (so the table is independent of tile order and iteration), columns the
@@ -319,6 +185,8 @@ void fill_packet_diag(const MetricGroups &groups, const PacketDiagColumns &cols,
 // the escape policy is never exercised. Row index in the diagnostic table =
 // packet id - 1 = fixture index. Function-local constexpr (the
 // mcnux_srcterms.cxx CUDA note on namespace-scope struct constants).
+namespace {
+
 struct PacketFixture {
   double x, y, z;
   double px, py, pz;

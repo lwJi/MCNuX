@@ -192,8 +192,8 @@ struct RangedTableCoefficients {
   BaselineTableCoefficients base;
   ClampCounters *counters; // caller-owned; nullptr => skip counting
 
-  Coefficients operator()(Species s, double E_MeV,
-                          const FluidState &st) const noexcept {
+  AMREX_GPU_HOST_DEVICE Coefficients
+  operator()(Species s, double E_MeV, const FluidState &st) const noexcept {
     // 1. Transparency floor: below the lowest tabulated density the cell is
     //    transparent — zero triple, no table touch, no counting (the floor
     //    is a policy outcome, not a clamp).

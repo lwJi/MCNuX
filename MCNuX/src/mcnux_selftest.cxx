@@ -194,6 +194,43 @@
 //                                                 q = K_cell, e = n,
 //                                                 k = 3b + s vs direct u,
 //                                                 bitwise)
+// 128       ledger.audit.net                      [MCNX-HYD-05] (event-side
+//                                                 net Sum dX per channel on
+//                                                 the synthetic list, exact)
+// 129       ledger.audit.gross                    [MCNX-HYD-05] (gross
+//                                                 activity Sum |dX| per
+//                                                 channel, exact)
+// 130       ledger.closure.cancellation           [MCNX-HYD-05] (grid total
+//                                                 + event net == 0 exactly,
+//                                                 all five channels)
+// 131       ledger.closure.pass                   [MCNX-HYD-05] (verdict
+//                                                 passes on the consistent
+//                                                 fixture, residual 0)
+// 132       ledger.closure.detects_leak           [MCNX-HYD-05] (doubled grid
+//                                                 total — a missing zero
+//                                                 point — fails all channels)
+// 133       ledger.closure.allzero_floor          [MCNX-HYD-05] (all-zero
+//                                                 list judged against the
+//                                                 documented eps0 floor,
+//                                                 passes)
+// 134       emission.bins.edges_are_nodes         [MCNX-OPA-04] (bin edges
+//                                                 equal the tabulated
+//                                                 linear-MeV nodes bitwise,
+//                                                 nodes-as-edges convention)
+// 135       emission.bins.count                   [MCNX-OPA-04] (N nodes ->
+//                                                 N - 1 bins, exact)
+// 136       emission.bins.center                  [MCNX-PKT-03] (grid bin's
+//                                                 center nu = 0.5 (E[b] +
+//                                                 E[b+1]), bitwise)
+// 137       emission.bins.width_eta_bridge        [MCNX-OPA-04] (eta_b =
+//                                                 eta * bin_width, bitwise
+//                                                 vs eta * (E[b+1] - E[b]))
+// 138       emission.map.zero_endpoints           [MCNX-PKT-03] (u = 0 maps
+//                                                 exactly to cell lo and
+//                                                 t_n; half-open intervals)
+// 139       emission.map.linearity                [MCNX-PKT-03] (u = 0.5 ->
+//                                                 lo + 0.5 * width, bitwise
+//                                                 affine map)
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -297,6 +334,20 @@ void run_battery(Battery &b) {
   // specs/packet-representation-and-sampling.md [MCNX-PKT-02/03/05] through
   // the mcnux_emission.hxx pure functions on pinned deterministic fixtures.
   append_emission_rows(b);
+
+  // Rows 128..133 — the conservation-ledger closure audit of
+  // specs/hydro-coupling-source-terms.md [MCNX-HYD-05] through the
+  // mcnux_srcterms.hxx audit/closure helpers on the shared synthetic-event
+  // fixture list (synthfix).
+  append_ledger_closure_rows(b);
+
+  // Rows 134..139 — the emission energy-bin grid (nodes-as-edges, dE_b from
+  // the tabulated linear-MeV nodes, [MCNX-OPA-04]) and the uniform ->
+  // physical creation mapping (u = 0 -> cell lo / t_n, affine
+  // lo + u * width, [MCNX-PKT-03]) of
+  // specs/packet-representation-and-sampling.md through the
+  // mcnux_emission.hxx pure functions on pinned deterministic fixtures.
+  append_emission_bins_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.

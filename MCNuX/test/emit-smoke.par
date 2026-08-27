@@ -1,0 +1,100 @@
+# emit-smoke — fixed-seed analytic-opacity smoke test of the runtime
+# emission/creation loop of specs/packet-representation-and-sampling.md
+# [MCNX-PKT-02/03/05] as a Cactus regression test.
+#
+# Uniform fluid (TestMCNuX "equilibration box": constant rho0, T0, Ye0,
+# vel = 0) on flat Minkowski, analytic Kirchhoff-form coefficients with
+# emission enabled for nu_e ONLY: eta_scale[1] = eta_scale[2] = 0 makes
+# eta_b = 0 for nu_e_bar and nu_x, and the count law's Bernoulli never
+# rounds up at frac = 0, so those species emit EXACTLY zero packets. The
+# nu_e scale eta_scale[0] is tuned (the run is fully deterministic at the
+# pinned seed, so tune-then-capture) to land the run's TOTAL emitted count
+# in 1..8: the per-packet table MCNuX::mcnux_packet_diag keys rows by packet
+# id - 1 and hard-errors above its declared SIZE=8, so that abort is itself
+# the tuning signal. Golden output: the table at every iteration (position
+# uniform in the creation cell, lower momentum p_i = nu n_hat_i on flat
+# static data with nu the MeV->code-converted bin center, p_t = -nu_code),
+# harness defaults ABSTOL = RELTOL = 1e-12.
+#
+# The analytic-mode energy grid is the pinned fixture grid of
+# mcnux_emission.cxx: nodes {5, 15, 25} MeV -> 2 bins, centers 10 and
+# 20 MeV. No geodesic push runs (test_synthetic_packets is forbidden with
+# enable_emission), so created packets keep their creation state across the
+# remaining iterations.
+#
+# ODESolvers must be active: ADMBaseX and HydroBaseX initial data are both
+# scheduled IN ODESolvers_Initial, and the emission loop reads metric and
+# fluid.
+
+ActiveThorns = "
+    CarpetX
+    IOUtil
+    ODESolvers
+    ADMBaseX
+    HydroBaseX
+    MCNuX
+    TestMCNuX
+"
+
+# Mandatory for any MCNuX run: CarpetX's own CCTK_PARAMCHECK routine rejects
+# every other presync mode.
+Cactus::presync_mode = "mixed-error"
+
+# The subject of this benchmark: the production emission loop plus its
+# diagnostic mirror. All other verification scaffolding is off.
+MCNuX::enable_emission = yes
+MCNuX::test_emission = yes
+MCNuX::test_synthetic_packets = no
+MCNuX::test_synthetic_deposit = no
+MCNuX::test_ledger_closure = no
+MCNuX::run_selftests = no
+
+# The pinned primary seed (the rng_seed default, restated) and the default
+# target packet energy, restated for determinism-audit clarity.
+MCNuX::rng_seed = 1296518744
+MCNuX::E_p = 10.0
+
+# Analytic coefficient source, nu_e emission only. kappa_a0[0] enters eta
+# multiplicatively (eta = eta_scale * kappa_a0 * Kirchhoff form) and is set
+# to 1 so eta_scale[0] alone carries the tuning; the packet-count tuning
+# target is a total of 1..8 packets over the whole run (see header).
+MCNuX::opacity_source = "analytic"
+MCNuX::kappa_a0[0] = 1.0
+MCNuX::eta_scale[0] = 5.5e-54
+MCNuX::eta_scale[1] = 0.0
+MCNuX::eta_scale[2] = 0.0
+
+# Flat background: the ADMBaseX defaults, restated.
+ADMBaseX::initial_data = "Cartesian Minkowski"
+ADMBaseX::initial_lapse = "one"
+ADMBaseX::initial_shift = "zero"
+
+# Uniform fluid everywhere (T0 > 0: the analytic Kirchhoff form divides
+# by T).
+HydroBaseX::initial_hydro = "equilibration box"
+TestMCNuX::rho0 = 1.0e12
+TestMCNuX::T0 = 5.0
+TestMCNuX::Ye0 = 0.25
+
+# 8^3 cells over the CarpetX default domain [-1, 1]^3 (dx = 0.25; default
+# dtfac gives dt = 0.125).
+CarpetX::ncells_x = 8
+CarpetX::ncells_y = 8
+CarpetX::ncells_z = 8
+
+Cactus::cctk_itlast = 2
+
+IO::out_dir = $parfile
+IO::out_every = 1
+IO::parfile_write = no
+
+# Keep the column-label header but drop IOUtil's creation date, hostname, and
+# absolute parameter-file path (see unit-selftest.par).
+IO::out_fileinfo = "axis labels"
+
+CarpetX::out_metadata = no
+
+# The golden data: the per-packet diagnostic table, one file per iteration.
+CarpetX::out_tsv_vars = "
+    MCNuX::mcnux_packet_diag
+"

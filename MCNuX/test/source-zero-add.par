@@ -38,9 +38,15 @@ ActiveThorns = "
 Cactus::presync_mode = "mixed-error"
 
 # The subject of this benchmark: the parameter-gated synthetic-event
-# contributor. The self-test battery is off — its rows are unit-selftest's
-# golden data, not this benchmark's.
+# contributor, plus the [MCNX-HYD-05] conservation-ledger closure audit over
+# the same synthetic list — per step and channel {P^t, P_x, P_y, P_z, L} the
+# grid total Sum_cells (source)*dV*dt must cancel the event-side packet total
+# to relative 1e-13 of the gross activity (eps0-floored); the verdict table
+# is golden data below and any failing channel aborts the run. The self-test
+# battery is off — its rows are unit-selftest's golden data, not this
+# benchmark's.
 MCNuX::test_synthetic_deposit = yes
+MCNuX::test_ledger_closure = yes
 MCNuX::run_selftests = no
 
 # 8^3 cells over the CarpetX default domain [-1, 1]^3 (dx = 0.25): the fixture
@@ -66,8 +72,10 @@ IO::out_fileinfo = "axis labels"
 CarpetX::out_metadata = no
 
 # The golden data: the deposited source-term variables, one x/y/z line triple
-# per iteration.
+# per iteration, plus the ledger-closure verdict table (one row per channel
+# per iteration).
 CarpetX::out_tsv_vars = "
     MCNuX::rad_force
     MCNuX::lepton_source
+    MCNuX::mcnux_ledger_diag
 "

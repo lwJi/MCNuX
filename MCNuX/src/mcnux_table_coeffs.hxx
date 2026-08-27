@@ -155,8 +155,8 @@ struct BaselineTableCoefficients {
 
   // One EOS chemical potential [MeV] at the fluid state (raw coordinates in,
   // the wrapper owns the single MeV->K conversion).
-  double chemical_potential(ChemicalPotential m,
-                            const FluidState &st) const noexcept {
+  AMREX_GPU_HOST_DEVICE double
+  chemical_potential(ChemicalPotential m, const FluidState &st) const noexcept {
     const int i = chemical_potential_index(m);
     return eos_evaluate(st.rho_cgs, st.T_MeV, st.Ye, v.eos_Ds, v.eos_nD,
                         v.eos_Ts_K, v.eos_nT, v.eos_Ys, v.eos_nY, v.eos_OS[i],
@@ -166,7 +166,8 @@ struct BaselineTableCoefficients {
   // mu_nu(s) = l(s) * (mu_e + mu_p - mu_n): +1 for nu_e, -1 for nu_e_bar
   // (opacity-eos-evaluation.md:207), via the pinned lepton numbers of
   // mcnux_units.hxx (no re-enumeration).
-  double mu_nu(Species s, const FluidState &st) const noexcept {
+  AMREX_GPU_HOST_DEVICE double mu_nu(Species s,
+                                     const FluidState &st) const noexcept {
     return lepton_number(s) * (chemical_potential(ChemicalPotential::Mu_e, st) +
                                chemical_potential(ChemicalPotential::Mu_p, st) -
                                chemical_potential(ChemicalPotential::Mu_n, st));
@@ -174,8 +175,8 @@ struct BaselineTableCoefficients {
 
   // kappa_s for one tabulated electron-type slot, iMom = 0, offset through
   // the sanctioned iso_offset lookup.
-  double kappa_s_slot(int slot, double E_MeV,
-                      const FluidState &st) const noexcept {
+  AMREX_GPU_HOST_DEVICE double
+  kappa_s_slot(int slot, double E_MeV, const FluidState &st) const noexcept {
     const wli::Real OS = iso_offset(v.iso_offsets, num_tabulated_species,
                                     v.iso_nMom, slot, iso_baseline_moment);
     return iso_evaluate(E_MeV, st.rho_cgs, st.T_MeV, st.Ye, v.iso_LogEs,
@@ -187,8 +188,8 @@ struct BaselineTableCoefficients {
   // The frozen TableEval contract: (Species, E [MeV], FluidState) ->
   // Coefficients {kappa_a [cm^-1], kappa_s [cm^-1],
   // eta [MeV cm^-3 s^-1 MeV^-1]}, g = 1 per species.
-  Coefficients operator()(Species s, double E_MeV,
-                          const FluidState &st) const noexcept {
+  AMREX_GPU_HOST_DEVICE Coefficients
+  operator()(Species s, double E_MeV, const FluidState &st) const noexcept {
     // nu_x FIRST — it has no EmAb/Iso dataset (emab_species_slot /
     // iso_species_slot return no_table_slot = -1, not a valid index):
     // kappa_a = eta = 0 exactly, kappa_s the exact half-mean of the two
