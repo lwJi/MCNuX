@@ -1,32 +1,63 @@
-# interactions-fixedseed — fixed-seed scatter-box benchmark of the episode
-# driver of specs/neutrino-matter-interactions.md
-# [MCNX-INT-01/02/04/05/06] as a Cactus regression test (the benchmark name
+# interactions-fixedseed — fixed-seed mixed-channel benchmark of the runtime
+# transport event chain: creation (the production emission loop of
+# specs/packet-representation-and-sampling.md [MCNX-PKT-02/03/05]),
+# scattering, and absorption (the episode driver of
+# specs/neutrino-matter-interactions.md [MCNX-INT-01..06]) all active in ONE
+# deterministic run, audited per step by the [MCNX-HYD-05] conservation-
+# ledger closure and the [MCNX-GPU-04] id-contract check (the benchmark name
 # pinned by specs/verification-suite-design.md [MCNX-VER-06]; the statistical
 # 4-sigma scatter box is a different, future benchmark).
 #
-# Setup: flat Minkowski, uniform at-rest fluid (TestMCNuX "equilibration
-# box"), analytic coefficients with a pure-scattering medium for nu_e —
-# kappa_s0[0] > 0, kappa_a0[0] = 0 (so Delta t_a = +inf and the scattering-
-# only Absorb placeholder is never exercised in golden data). The population
-# is the deterministic eight-packet synthetic fixture (all species nu_e);
-# MCNuX_EpisodeDriver replaces the plain geodesic push (its schedule
-# condition carries && !enable_interactions) and runs the per-packet episode
-# loop: interaction-time draws at the pinned seed against cell-exit and
-# step-remainder bounds, elastic scattering at fixed fluid-frame energy
-# through the pinned tetrad transform.
+# Setup: flat Minkowski over the TestMCNuX "uniform sphere" hydro profile —
+# a hot sphere (T0 = 5 MeV) centered at the origin inside a cold ambient
+# (T_amb = 1 MeV). The analytic (gray) coefficients make the OPACITIES
+# spatially uniform (kappa_a/kappa_s are pure per-species constants), while
+# eta's Kirchhoff factor 1/(exp(E/T) + 1) concentrates emission in the hot
+# sphere: at the 10/20 MeV bin centers the ambient emissivity is suppressed
+# by ~3e3 relative to the sphere, so creation happens (at this seed) only in
+# sphere cells and the created packets' motion stays well inside the domain.
 #
-# Golden data: the per-packet table MCNuX::mcnux_packet_diag at every
-# iteration (harness defaults ABSTOL = RELTOL = 1e-12). It verifies
-# elasticity and determinism per neutrino-matter-interactions.md:208-223: on
-# flat static data nu = p^t = |p| is preserved by every scattering, so each
-# packet's p_t column (= -|p|) is CONSTANT across all iterations while its
-# momentum direction changes at each scattering event; fixed-seed re-runs
-# reproduce the table bitwise.
+# Event chain per iteration: MCNuX_EpisodeDriver (the geodesic-push slot)
+# runs the per-packet episode loop over the LIVE population — interaction-
+# time draws at the pinned seed against cell-exit and step-remainder bounds,
+# elastic scattering through the pinned tetrad transform (C2 deposit of the
+# scattering delta), absorption depositing the packet's FULL content and
+# removing the packet whole (id value retired, never reissued) — then
+# MCNuX_IdContractCheck asserts the [MCNX-GPU-04] contract over creation AND
+# removal, then MCNuX_Emission creates new packets (NextID-issued ids,
+# emission deltas deposited), then MCNuX_LedgerClosure audits the per-step
+# five-channel balance with the event side folded from BOTH per-step audits
+# (emission_step_audit() + interaction_step_audit()) against the grid sum
+# times the real dV*dt = 0.25^3 * 0.125; any failing channel aborts the run.
+# The synthetic fixtures stay off (test_synthetic_packets is HARD-FORBIDDEN
+# with enable_emission, and test_synthetic_deposit under the closure is
+# forbidden with either real contributor — different dV*dt pairs).
 #
-# kappa_s0[0] = 5.0e-5 cm^-1 -> kappa_code = 5.0e-5 * 1.4766e5 ~ 7.4, i.e. a
-# mean free time ~0.135 vs dt = 0.125 and a cell-crossing time <= 0.25: over
-# 8 packets x 4 steps a healthy handful of packets scatter (tuned, then
-# captured).
+# Golden data, one file set per iteration (harness defaults
+# ABSTOL = RELTOL = 1e-12):
+#   * MCNuX::mcnux_packet_diag — the per-packet table (rows keyed id - 1,
+#     SIZE = 8: TOTAL ids ever issued must stay <= 8, the emission tuning
+#     constraint), filled by MCNuX_EmissionDiag after the emission
+#     contributor, so each iteration's snapshot is the post-emission state:
+#     new rows appear at creation, momentum directions change at scatterings
+#     (|p| preserved on this flat static background), and an absorbed
+#     packet's row reverts to all-zero and stays zero (discrete removal).
+#   * MCNuX::mcnux_ledger_diag — the five-channel closure verdict table:
+#     lg_pass = 1 on every row of every iteration, with all three event
+#     channels contributing to the audited totals over the run. (The AT
+#     initial leg's all-zero row is the documented eps0-floor branch.)
+# Fixed-seed re-runs reproduce every TSV bitwise ([MCNX-RNG-06]).
+#
+# Tuning at this seed (tuned, then captured): eta_scale[0] with
+# kappa_a0[0] = 4.0e-5 cm^-1 lands exactly 8 nu_e packets (2+1+3+2, ids
+# 1..8 — the full SIZE=8 diagnostic-table budget; ids are never reused, so
+# the TOTAL ever issued is what must fit) over the 4 emission steps
+# (eta_scale[1] = eta_scale[2] = 0: no nu_e_bar/nu_x creation, id budget
+# tight); kappa_s0[0] = 5.0e-5 cm^-1 (mean free time ~0.135) and kappa_a0[0]
+# (mean free time ~0.17) against dt = 0.125 give 2 scattering and 4
+# absorption events among the created packets within cctk_itlast = 4. All
+# three channels were confirmed fired from the episode-driver log lines of
+# the capture run, not assumed.
 #
 # ODESolvers must be active: ADMBaseX and HydroBaseX initial data are both
 # scheduled IN ODESolvers_Initial, and the driver reads metric and fluid.
@@ -45,43 +76,59 @@ ActiveThorns = "
 # every other presync mode.
 Cactus::presync_mode = "mixed-error"
 
-# The subject of this benchmark: the episode driver over the synthetic
-# packet fixture. All other verification scaffolding is off.
+# The subject of this benchmark: the full runtime event chain — production
+# emission (creation), episode driver (scattering + absorption/removal) —
+# under the ledger-closure and id-contract audits. The synthetic fixtures
+# stay off (see header).
+MCNuX::enable_emission = yes
 MCNuX::enable_interactions = yes
-MCNuX::test_synthetic_packets = yes
-MCNuX::enable_emission = no
-MCNuX::test_emission = no
+MCNuX::test_emission = yes
+MCNuX::test_ledger_closure = yes
+MCNuX::test_id_contract = yes
+MCNuX::test_synthetic_packets = no
 MCNuX::test_synthetic_deposit = no
-MCNuX::test_ledger_closure = no
 MCNuX::test_fluid_gather = no
 MCNuX::run_selftests = no
 
-# The pinned primary seed (the rng_seed default, restated for the
-# determinism audit).
+# The pinned primary seed (the rng_seed default, restated) and the default
+# target packet energy, restated for determinism-audit clarity.
 MCNuX::rng_seed = 1296518744
+MCNuX::E_p = 10.0
 
-# Analytic coefficient source: pure scattering for nu_e (the fixture's only
-# species). kappa_a0[0] keeps its 0 default, so the absorption channel is
-# transparent (Delta t_a = +inf) and eta = 0 (nothing consumes it here).
+# Analytic coefficient source (table mode is forbidden with both loops
+# active), nu_e in all three channels, other species inert (see the tuning
+# note in the header).
 MCNuX::opacity_source = "analytic"
+MCNuX::kappa_a0[0] = 4.0e-5
 MCNuX::kappa_s0[0] = 5.0e-5
+MCNuX::eta_scale[0] = 1.2e-48
+MCNuX::eta_scale[1] = 0.0
+MCNuX::eta_scale[2] = 0.0
 
 # Flat background: the ADMBaseX defaults, restated.
 ADMBaseX::initial_data = "Cartesian Minkowski"
 ADMBaseX::initial_lapse = "one"
 ADMBaseX::initial_shift = "zero"
 
-# Uniform at-rest fluid everywhere (T0 > 0 keeps the analytic Kirchhoff
-# form well-defined even though eta is unused here).
-HydroBaseX::initial_hydro = "equilibration box"
+# The hot emission sphere inside a cold ambient (see header). R_s = 0.45 on
+# this 8^3 grid (dx = 0.25, cell centers at +-0.125 + n*0.25) contains the
+# 32 cell centers of the distance shells 0.2165 and 0.4146 (the next shell,
+# 0.5449, is outside), so every emission cell lies within |x^i| <= 0.5 and
+# created packets (speed <= 1) stay inside the domain over the run.
+HydroBaseX::initial_hydro = "uniform sphere"
 TestMCNuX::rho0 = 1.0e12
 TestMCNuX::T0 = 5.0
 TestMCNuX::Ye0 = 0.25
+TestMCNuX::rho_amb = 1.0e6
+TestMCNuX::T_amb = 1.0
+TestMCNuX::Ye_amb = 0.45
+TestMCNuX::sphere_x0 = 0.0
+TestMCNuX::sphere_y0 = 0.0
+TestMCNuX::sphere_z0 = 0.0
+TestMCNuX::sphere_radius = 0.45
 
 # 8^3 cells over the CarpetX default domain [-1, 1]^3 (dx = 0.25; default
-# dtfac gives dt = 0.125). Four steps move every packet by at most 0.5 from
-# a seed position inside |x^i| <= 0.25, so all stay inside the domain and
-# the escape policy is never exercised.
+# dtfac gives dt = 0.125).
 CarpetX::ncells_x = 8
 CarpetX::ncells_y = 8
 CarpetX::ncells_z = 8
@@ -98,7 +145,9 @@ IO::out_fileinfo = "axis labels"
 
 CarpetX::out_metadata = no
 
-# The golden data: the per-packet diagnostic table, one file per iteration.
+# The golden data: the per-packet diagnostic table and the five-channel
+# ledger-closure verdict table, one file per iteration.
 CarpetX::out_tsv_vars = "
     MCNuX::mcnux_packet_diag
+    MCNuX::mcnux_ledger_diag
 "

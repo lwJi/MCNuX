@@ -393,10 +393,13 @@ if (test_synthetic_deposit)
 # deposited variables through the driver's MultiFabs, valid cells only) and
 # the event-side packet total rebuilt independently from the active
 # contributors' pre-negation LedgerDelta records: the shared synthetic list
-# (with test_synthetic_deposit) and the emission loop's per-step audit
+# (with test_synthetic_deposit), the emission loop's per-step audit
 # emission_step_audit() (with enable_emission — populated by MCNuX_Emission
-# IN MCNuX_AddToSourceTerms, which this routine is ordered after, so the
-# audit is complete when read). Global mode: one verdict per transport step, the routine
+# IN MCNuX_AddToSourceTerms, which this routine is ordered after), and the
+# episode driver's per-step audit interaction_step_audit() (with
+# enable_interactions — populated by MCNuX_EpisodeDriver, which runs BEFORE
+# MCNuX_AddToSourceTerms), so both audits are complete when read. Global
+# mode: one verdict per transport step, the routine
 # walks the patches/levels itself ([MCNX-CTX-03]); the READS: on the source
 # groups and the WRITES: on the verdict table are the complete grid-variable
 # footprint ([MCNX-CTX-04]). The AT initial leg audits the all-zero state

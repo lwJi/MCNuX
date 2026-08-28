@@ -154,8 +154,10 @@ LedgerAudit &emission_step_audit();
 // SAME pre-negation LedgerDelta values it deposits, with the identical
 // code-unit dV/dt normalization pair. Separate from emission_step_audit()
 // above — the two contributors own their accumulators independently (never
-// mutate the other's). Exposed for the later ledger-closure extension task;
-// nothing consumes it yet.
+// mutate the other's). Consumed by MCNuX_LedgerClosure (mcnux_srcterms.cxx),
+// which folds it into its event-side total each step alongside the emission
+// audit (a provable no-op when MCNuX_EpisodeDriver has not run: the
+// accumulator is zero-initialized and only MCNuX_EpisodeDriver writes it).
 LedgerAudit &interaction_step_audit();
 
 // The [MCNX-HYD-05] closure tolerance: relative 1e-13 per step (the

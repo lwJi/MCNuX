@@ -18,8 +18,9 @@
 //     of MCNuX_SyntheticDeposit (one contribution per cell inside a grid
 //     loop) is NOT it and must not be copied for packet events.
 //
-// Consumers: the emission loop (mcnux_emission.cxx) now; the episode driver
-// and absorption/removal operators later — all reuse this ONE helper.
+// Consumers: the emission loop (mcnux_emission.cxx) and the episode driver's
+// scattering/absorption events (mcnux_interactions.cxx) — all packet
+// depositors reuse this ONE helper.
 
 #include "mcnux_srcterms.hxx"
 
