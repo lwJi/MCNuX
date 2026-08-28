@@ -199,13 +199,21 @@ double sum_group_component(const int gi, const int comp) {
 //
 // with the grid side reduced from the deposited MCNuX::rad_force /
 // MCNuX::lepton_source variables and the event side independently rebuilt
-// from the shared synthfix LedgerDelta list (pre-negation packet deltas —
-// never the deposited SourceContribution, which would trivially self-cancel).
-// The multiply uses the fixture's synthfix::dV * synthfix::dt = 0.5 (the
-// deposit's own normalization), not the grid's cell size or the run's time
-// step. The verdict table is mirrored into MCNuX::mcnux_ledger_diag (one row
-// per channel) for golden output; any failing channel additionally aborts
-// the run so a regression is loud even without a golden diff.
+// from pre-negation packet deltas — never the deposited SourceContribution,
+// which would trivially self-cancel. Two event-side contributors are folded:
+// the shared synthfix LedgerDelta list (only with test_synthetic_deposit,
+// matching the contributor's own gate) and the per-step emission audit
+// emission_step_audit() (always — it is zero unless MCNuX_Emission ran this
+// step). The grid-side multiplier must be the deposit's OWN dV*dt pairing
+// ([MCNX-HYD-02]): the fixture's synthfix::dV * synthfix::dt = 0.5 in
+// synthetic-deposit mode, and the real coordinate cell volume times
+// cctk_delta_time otherwise (the pair MCNuX_Emission deposits with).
+// MCNuX_ParamCheck forbids mixing the two contributors under this closure —
+// they normalize with different dV*dt, so no single scalar multiplier could
+// close the shared grid sum. The verdict table is mirrored into
+// MCNuX::mcnux_ledger_diag (one row per channel) for golden output; any
+// failing channel additionally aborts the run so a regression is loud even
+// without a golden diff.
 //
 // The AT initial leg audits the all-zero state (zeroed variables, scale-0
 // event list): both sides are exactly zero and the verdict exercises the
@@ -214,30 +222,59 @@ extern "C" void MCNuX_LedgerClosure(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTS_MCNuX_LedgerClosure;
   DECLARE_CCTK_PARAMETERS;
 
-  // Event side: the synthetic list's LedgerDelta values at this iteration's
-  // scale (MCNuX_SyntheticDeposit above deposits exactly this list with
-  // scale = cctk_iteration).
-  const double scale = static_cast<double>(cctk_iteration);
+  // Event side, contributor 1: the synthetic list's LedgerDelta values at
+  // this iteration's scale (MCNuX_SyntheticDeposit above deposits exactly
+  // this list with scale = cctk_iteration), folded only when that
+  // contributor is actually scheduled (its own test_synthetic_deposit gate).
   LedgerAudit audit{};
-  audit.accumulate(synthfix::emission(scale));
-  audit.accumulate(synthfix::absorption(scale));
-  audit.accumulate(synthfix::scattering(scale));
+  if (test_synthetic_deposit) {
+    const double scale = static_cast<double>(cctk_iteration);
+    audit.accumulate(synthfix::emission(scale));
+    audit.accumulate(synthfix::absorption(scale));
+    audit.accumulate(synthfix::scattering(scale));
+  }
+  // Event side, contributor 2: the production emission loop's per-step audit
+  // ([MCNX-HYD-05] event side, mcnux_emission.cxx). Folded unconditionally:
+  // it is zero-initialized and only MCNuX_Emission writes it, so this is a
+  // provable no-op on the AT initial leg and in emission-free runs.
+  audit.accumulate(emission_step_audit());
 
   // Grid side: Sum_cells (source value) * dV * dt per channel, with the
-  // fixture's dV dt.
+  // deposit's own dV*dt pairing (mode-dependent, see the routine comment).
   const int gi_rad = CCTK_GroupIndex("MCNuX::rad_force");
   const int gi_lep = CCTK_GroupIndex("MCNuX::lepton_source");
   if (gi_rad < 0 || gi_lep < 0)
     CCTK_VERROR("MCNuX ledger closure needs the MCNuX::rad_force and "
                 "MCNuX::lepton_source groups");
 
-  const double dVdt = synthfix::dV * synthfix::dt;
+  const double grid_sum[5] = {
+      sum_group_component(gi_rad, 0), // rf_t    -> P^t
+      sum_group_component(gi_rad, 1), // rf_x    -> P_x
+      sum_group_component(gi_rad, 2), // rf_y    -> P_y
+      sum_group_component(gi_rad, 3), // rf_z    -> P_z
+      sum_group_component(gi_lep, 0), // lep_src -> L
+  };
+
+  // The multiplier pairs with the contributor's deposit normalization
+  // ([MCNX-HYD-02], mcnux_deposit.hxx pairing contract): the fixture's
+  // synthetic constants in synthetic-deposit mode; otherwise the real
+  // coordinate cell volume of the (unigrid, single-level — the
+  // sum_group_component assumption above) grid times the run's
+  // cctk_delta_time, mirroring MCNuX_Emission's own geometry access
+  // (ghext non-null already enforced inside sum_group_component).
+  double dVdt;
+  if (test_synthetic_deposit) {
+    dVdt = synthfix::dV * synthfix::dt;
+  } else {
+    const amrex::Geometry &geom =
+        CarpetX::ghext->patchdata.at(0).amrcore->Geom(0);
+    const double dV = geom.CellSize(0) * geom.CellSize(1) * geom.CellSize(2);
+    dVdt = dV * cctk_delta_time;
+  }
+
   const double grid_total[5] = {
-      sum_group_component(gi_rad, 0) * dVdt, // rf_t    -> P^t
-      sum_group_component(gi_rad, 1) * dVdt, // rf_x    -> P_x
-      sum_group_component(gi_rad, 2) * dVdt, // rf_y    -> P_y
-      sum_group_component(gi_rad, 3) * dVdt, // rf_z    -> P_z
-      sum_group_component(gi_lep, 0) * dVdt, // lep_src -> L
+      grid_sum[0] * dVdt, grid_sum[1] * dVdt, grid_sum[2] * dVdt,
+      grid_sum[3] * dVdt, grid_sum[4] * dVdt,
   };
   const double net[5] = {audit.net.dPt, audit.net.dPx, audit.net.dPy,
                          audit.net.dPz, audit.net.dL};

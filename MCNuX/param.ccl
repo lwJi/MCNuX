@@ -36,11 +36,14 @@ BOOLEAN test_synthetic_deposit "Deposit a synthetic, iteration-scaled event list
 # cancels the event-side packet total dX to relative 1e-13 of the gross event
 # activity (eps0-floored), mirrors the verdict table into
 # MCNuX::mcnux_ledger_diag, and aborts on any failing channel. Off by default
-# — the audit is verification scaffolding over the synthetic event list, not
-# physics — and STEERABLE=NEVER, because the table's storage and the
-# routine's scheduling are decided from it at startup. Meaningful only
-# together with test_synthetic_deposit (the event side is the shared
-# synthetic list).
+# — the audit is verification scaffolding, not physics — and STEERABLE=NEVER,
+# because the table's storage and the routine's scheduling are decided from
+# it at startup. The event side folds the contributors actually active in the
+# run: the shared synthetic list (with test_synthetic_deposit) and the
+# production emission loop's per-step audit (with enable_emission); the
+# grid-side dV*dt multiplier follows the active contributor's own deposit
+# normalization, so combining both contributors under the closure is
+# forbidden at PARAMCHECK (mcnux_paramcheck.cxx).
 
 BOOLEAN test_ledger_closure "Audit the per-step five-channel conservation-ledger closure of the synthetic event list against the deposited source terms" STEERABLE=NEVER
 {
@@ -147,6 +150,41 @@ CCTK_REAL E_p "Target packet fluid-frame energy [MeV] (specs/packet-representati
 # test_synthetic_packets (fixture ids would collide with production ids).
 
 BOOLEAN enable_emission "Run the production emission/creation loop each transport step" STEERABLE=NEVER
+{
+} "no"
+
+# Episode-driver gate of specs/neutrino-matter-interactions.md
+# [MCNX-INT-01/02/03/04/05/06]: MCNuX::enable_interactions = yes schedules
+# MCNuX_EpisodeDriver inside the transport step (the MCNuX_GeodesicPush slot;
+# the plain push is then NOT scheduled — the driver subsumes it), which runs
+# the per-packet sampling-episode loop: interaction-time draws against
+# cell-exit and step-remainder bounds, elastic scattering at fixed
+# fluid-frame energy through the pinned tetrad transform, absorption
+# removing the packet whole (full-content deposit, retired id, no weight
+# decay), and every event's momentum/lepton exchange deposited into the
+# source-term variables.
+# Off by default and STEERABLE=NEVER, because the routine's scheduling is
+# decided from it at startup. MCNuX_ParamCheck forbids it together with
+# opacity_source = "table" (no table-residency layer yet); it IS compatible
+# with test_synthetic_packets (the fixture is the test population of the
+# `interactions-fixedseed` and `absorb-smoke` benchmarks).
+
+BOOLEAN enable_interactions "Run the sampling-episode driver (interaction competition + elastic scattering) each transport step" STEERABLE=NEVER
+{
+} "no"
+
+# Runtime id-contract check of specs/particle-container-and-gpu.md
+# [MCNX-GPU-04] (the `absorb-smoke` benchmark): MCNuX::test_id_contract =
+# yes schedules MCNuX_IdContractCheck once per transport step after the
+# episode driver, sampling every live packet's id and asserting the id
+# contract over the whole run — live logical keys pairwise distinct, ids in
+# [1, 2^39 - 3], bit 63 of the repacked logical key (cpu << 39) | id clear,
+# and no retired id value ever reappearing after a removal. Any violation is
+# a hard CCTK_VERROR abort; the check writes no grid data. Off by default —
+# verification scaffolding — and STEERABLE=NEVER, because the routine's
+# scheduling is decided from it at startup.
+
+BOOLEAN test_id_contract "Assert the [MCNX-GPU-04] packet id contract (uniqueness, range, bit 63, no retired-id reuse) every transport step" STEERABLE=NEVER
 {
 } "no"
 

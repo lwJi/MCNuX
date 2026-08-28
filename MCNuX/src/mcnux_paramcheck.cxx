@@ -41,6 +41,34 @@ extern "C" void MCNuX_ParamCheck(CCTK_ARGUMENTS) {
         "loop's RangedTableCoefficients slot has no live table views to "
         "evaluate ([MCNX-OPA-04]). Use the analytic coefficient source, or "
         "disable emission.");
+  // Episode-driver guard (same no-table-residency reason as the emission
+  // guard above; enable_interactions WITH test_synthetic_packets is allowed
+  // — the fixture is the test population of `interactions-fixedseed`).
+  if (enable_interactions && CCTK_EQUALS(opacity_source, "table"))
+    CCTK_VERROR(
+        "MCNuX::enable_interactions = yes requires MCNuX::opacity_source = "
+        "\"analytic\": no table-residency layer exists yet, so the episode "
+        "driver's RangedTableCoefficients slot has no live table views to "
+        "evaluate ([MCNX-OPA-04]). Use the analytic coefficient source, or "
+        "disable interactions.");
+  // Ledger-closure auditability guard ([MCNX-HYD-05]): the synthetic-deposit
+  // fixture normalizes with synthfix::dV * synthfix::dt = 0.5 while the real
+  // emission contributor normalizes with the grid's cell volume times the
+  // run's dt. Both land in the same grid sum, so with both active no single
+  // scalar multiplier can reconstruct Sum_cells (source)*dV*dt and the
+  // closure is un-auditable. Forbid the mix rather than silently mis-close.
+  if (test_ledger_closure && test_synthetic_deposit && enable_emission)
+    CCTK_VERROR(
+        "MCNuX::test_ledger_closure = yes cannot audit a run with BOTH "
+        "MCNuX::test_synthetic_deposit = yes AND MCNuX::enable_emission = "
+        "yes: the two contributors deposit with different dV*dt "
+        "normalization pairs (the fixture's synthetic constants vs the "
+        "grid's cell volume times the run's dt) into the same source-term "
+        "sum, so no single grid-side multiplier closes the ledger "
+        "([MCNX-HYD-05], specs/hydro-coupling-source-terms.md:177-188). "
+        "Disable one of the two contributors, or turn the closure audit "
+        "off.");
+
   if (enable_emission && test_synthetic_packets)
     CCTK_VERROR(
         "MCNuX::enable_emission = yes is incompatible with "

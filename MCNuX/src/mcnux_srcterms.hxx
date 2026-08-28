@@ -117,16 +117,46 @@ struct LedgerAudit {
     gross.dPz += detail::cabs(d.dPz);
     gross.dL += detail::cabs(d.dL);
   }
+
+  // Fold another audit in whole (net and gross already event-summed by its
+  // owner): channel-wise += on both accumulators. Used by
+  // MCNuX_LedgerClosure to merge the per-contributor step audits
+  // (emission_step_audit(), later interaction_step_audit()) into its local
+  // event-side total. No absolute values here — the folded audit's gross is
+  // already Sum_events |dX|.
+  constexpr void accumulate(const LedgerAudit &a) noexcept {
+    net.dPt += a.net.dPt;
+    net.dPx += a.net.dPx;
+    net.dPy += a.net.dPy;
+    net.dPz += a.net.dPz;
+    net.dL += a.net.dL;
+    gross.dPt += a.gross.dPt;
+    gross.dPx += a.gross.dPx;
+    gross.dPy += a.gross.dPy;
+    gross.dPz += a.gross.dPz;
+    gross.dL += a.gross.dL;
+  }
 };
 
 // The per-step event-side audit of the production emission loop
 // ([MCNX-HYD-05] event side): reset and refilled once per transport step by
 // MCNuX_Emission (mcnux_emission.cxx, which defines it) from the SAME
 // pre-negation LedgerDelta values it deposits, with the identical code-unit
-// dV/dt normalization pair. Exposed here so the later ledger-closure
-// extension task can fold it into MCNuX_LedgerClosure beyond the synthfix
-// list; nothing consumes it yet.
+// dV/dt normalization pair. Consumed by MCNuX_LedgerClosure
+// (mcnux_srcterms.cxx), which folds it into its event-side total each step
+// (a provable no-op when MCNuX_Emission has not run: the accumulator is
+// zero-initialized and only MCNuX_Emission writes it).
 LedgerAudit &emission_step_audit();
+
+// The per-step event-side audit of the episode driver ([MCNX-HYD-05] event
+// side, interaction events): reset and refilled once per transport step by
+// MCNuX_EpisodeDriver (mcnux_interactions.cxx, which defines it) from the
+// SAME pre-negation LedgerDelta values it deposits, with the identical
+// code-unit dV/dt normalization pair. Separate from emission_step_audit()
+// above — the two contributors own their accumulators independently (never
+// mutate the other's). Exposed for the later ledger-closure extension task;
+// nothing consumes it yet.
+LedgerAudit &interaction_step_audit();
 
 // The [MCNX-HYD-05] closure tolerance: relative 1e-13 per step (the
 // specs/README.md conservation tolerance).

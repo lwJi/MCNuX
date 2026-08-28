@@ -1,0 +1,123 @@
+# absorb-smoke — fixed-seed absorption/removal benchmark of the episode
+# driver's [MCNX-INT-03] branch (specs/neutrino-matter-interactions.md) and
+# of the packet id contract [MCNX-GPU-04]
+# (specs/particle-container-and-gpu.md) as a Cactus regression test. (The
+# name deliberately avoids the reserved future `stats-beam` statistical
+# benchmark.)
+#
+# Setup: flat Minkowski, uniform at-rest fluid (TestMCNuX "equilibration
+# box"), analytic coefficients with a pure-ABSORPTION medium for nu_e —
+# kappa_a0[0] > 0, kappa_s0[0] at its 0 default, so absorption is the sole
+# interaction channel (Delta t_s = +inf, no scattering ever fires). The
+# population is the deterministic eight-packet synthetic fixture (all
+# species nu_e); MCNuX_EpisodeDriver replaces the plain geodesic push and
+# runs the per-packet episode loop at the pinned seed. An Absorb outcome
+# deposits the packet's FULL content (-N p^t, -N p_i, -l_s N; no weight
+# decay) into the episode cell and removes the packet whole (invalidated
+# slot compacted by Redistribute, id value retired, never reissued).
+#
+# Golden data, one file set per iteration (harness defaults
+# ABSTOL = RELTOL = 1e-12):
+#   * MCNuX::mcnux_packet_diag — the discrete-removal observable: rows are
+#     keyed packet id - 1 and the table is zeroed then filled from LIVE
+#     packets only, so an absorbed packet's row flips to all-zero at the
+#     step of its absorption and stays zero — the packet count decreases
+#     discretely, one whole packet at a time, never by fractional weight.
+#   * MCNuX::rad_force, MCNuX::lepton_source — the absorbed energy/momentum
+#     and lepton number appearing as source terms in the absorbing cells
+#     ([MCNX-HYD-02] normalization; the deposits survive to end-of-step
+#     output because MCNuX_ZeroSourceTerms runs first in the transport step
+#     and the driver runs before MCNuX_AddToSourceTerms).
+#
+# The [MCNX-GPU-04] runtime id-contract check (MCNuX::test_id_contract)
+# runs after the driver every step and hard-aborts on any violation: live
+# logical keys pairwise distinct, ids in [1, 2^39 - 3], bit 63 of the
+# repacked logical key (cpu << 39) | id clear, and no retired id value
+# reappearing over the run. It writes no golden artifact — a clean run IS
+# the pass.
+#
+# kappa_a0[0] = 2.0e-5 cm^-1 -> kappa_code = 2.0e-5 * 1.4766e5 ~ 2.95, i.e.
+# a mean free time ~0.34 against 4 x 0.125 = 0.5 of total path: a handful of
+# the 8 packets absorb across the 4 steps while others survive (tuned, then
+# captured).
+#
+# ODESolvers must be active: ADMBaseX and HydroBaseX initial data are both
+# scheduled IN ODESolvers_Initial, and the driver reads metric and fluid.
+
+ActiveThorns = "
+    CarpetX
+    IOUtil
+    ODESolvers
+    ADMBaseX
+    HydroBaseX
+    MCNuX
+    TestMCNuX
+"
+
+# Mandatory for any MCNuX run: CarpetX's own CCTK_PARAMCHECK routine rejects
+# every other presync mode.
+Cactus::presync_mode = "mixed-error"
+
+# The subject of this benchmark: the episode driver's absorption/removal
+# branch over the synthetic packet fixture, plus the id-contract guard. All
+# other verification scaffolding is off.
+MCNuX::enable_interactions = yes
+MCNuX::test_synthetic_packets = yes
+MCNuX::test_id_contract = yes
+MCNuX::enable_emission = no
+MCNuX::test_emission = no
+MCNuX::test_synthetic_deposit = no
+MCNuX::test_ledger_closure = no
+MCNuX::test_fluid_gather = no
+MCNuX::run_selftests = no
+
+# The pinned primary seed (the rng_seed default, restated for the
+# determinism audit).
+MCNuX::rng_seed = 1296518744
+
+# Analytic coefficient source: pure absorption for nu_e (the fixture's only
+# species). kappa_s0[0] keeps its 0 default, so the scattering channel is
+# transparent (Delta t_s = +inf); eta is unused (no emission loop here).
+MCNuX::opacity_source = "analytic"
+MCNuX::kappa_a0[0] = 2.0e-5
+
+# Flat background: the ADMBaseX defaults, restated.
+ADMBaseX::initial_data = "Cartesian Minkowski"
+ADMBaseX::initial_lapse = "one"
+ADMBaseX::initial_shift = "zero"
+
+# Uniform at-rest fluid everywhere (T0 > 0 keeps the analytic Kirchhoff
+# form well-defined even though eta is unused here).
+HydroBaseX::initial_hydro = "equilibration box"
+TestMCNuX::rho0 = 1.0e12
+TestMCNuX::T0 = 5.0
+TestMCNuX::Ye0 = 0.25
+
+# 8^3 cells over the CarpetX default domain [-1, 1]^3 (dx = 0.25; default
+# dtfac gives dt = 0.125). Four steps move every surviving packet by at most
+# 0.5 from a seed position inside |x^i| <= 0.25, so all stay inside the
+# domain and the escape policy is never exercised.
+CarpetX::ncells_x = 8
+CarpetX::ncells_y = 8
+CarpetX::ncells_z = 8
+
+Cactus::cctk_itlast = 4
+
+IO::out_dir = $parfile
+IO::out_every = 1
+IO::parfile_write = no
+
+# Keep the column-label header but drop IOUtil's creation date, hostname, and
+# absolute parameter-file path (see unit-selftest.par).
+IO::out_fileinfo = "axis labels"
+
+CarpetX::out_metadata = no
+
+# The golden data: the per-packet diagnostic table (discrete removal) and
+# the deposited source terms (absorbed energy/momentum/lepton number), one
+# file set per iteration.
+CarpetX::out_tsv_vars = "
+    MCNuX::mcnux_packet_diag
+    MCNuX::rad_force
+    MCNuX::lepton_source
+"

@@ -10,7 +10,7 @@
 // ([MCNX-CTX-04]). The particle operators here never use the grid-point loop
 // machinery (loop_device.hxx): per-packet work is one amrex::ParallelFor
 // over a particle tile capturing trivially-copyable values ([MCNX-GPU-02],
-// the exemplar_packet_kernel pattern of mcnux_particles.hxx).
+// the packet-kernel idiom documented in mcnux_particles.hxx).
 //
 // Scheduling ([MCNX-CTX-03]): both routines run in global/level mode —
 // CarpetX invokes such a routine exactly once per traversal — and walk the

@@ -1,0 +1,104 @@
+# interactions-fixedseed — fixed-seed scatter-box benchmark of the episode
+# driver of specs/neutrino-matter-interactions.md
+# [MCNX-INT-01/02/04/05/06] as a Cactus regression test (the benchmark name
+# pinned by specs/verification-suite-design.md [MCNX-VER-06]; the statistical
+# 4-sigma scatter box is a different, future benchmark).
+#
+# Setup: flat Minkowski, uniform at-rest fluid (TestMCNuX "equilibration
+# box"), analytic coefficients with a pure-scattering medium for nu_e —
+# kappa_s0[0] > 0, kappa_a0[0] = 0 (so Delta t_a = +inf and the scattering-
+# only Absorb placeholder is never exercised in golden data). The population
+# is the deterministic eight-packet synthetic fixture (all species nu_e);
+# MCNuX_EpisodeDriver replaces the plain geodesic push (its schedule
+# condition carries && !enable_interactions) and runs the per-packet episode
+# loop: interaction-time draws at the pinned seed against cell-exit and
+# step-remainder bounds, elastic scattering at fixed fluid-frame energy
+# through the pinned tetrad transform.
+#
+# Golden data: the per-packet table MCNuX::mcnux_packet_diag at every
+# iteration (harness defaults ABSTOL = RELTOL = 1e-12). It verifies
+# elasticity and determinism per neutrino-matter-interactions.md:208-223: on
+# flat static data nu = p^t = |p| is preserved by every scattering, so each
+# packet's p_t column (= -|p|) is CONSTANT across all iterations while its
+# momentum direction changes at each scattering event; fixed-seed re-runs
+# reproduce the table bitwise.
+#
+# kappa_s0[0] = 5.0e-5 cm^-1 -> kappa_code = 5.0e-5 * 1.4766e5 ~ 7.4, i.e. a
+# mean free time ~0.135 vs dt = 0.125 and a cell-crossing time <= 0.25: over
+# 8 packets x 4 steps a healthy handful of packets scatter (tuned, then
+# captured).
+#
+# ODESolvers must be active: ADMBaseX and HydroBaseX initial data are both
+# scheduled IN ODESolvers_Initial, and the driver reads metric and fluid.
+
+ActiveThorns = "
+    CarpetX
+    IOUtil
+    ODESolvers
+    ADMBaseX
+    HydroBaseX
+    MCNuX
+    TestMCNuX
+"
+
+# Mandatory for any MCNuX run: CarpetX's own CCTK_PARAMCHECK routine rejects
+# every other presync mode.
+Cactus::presync_mode = "mixed-error"
+
+# The subject of this benchmark: the episode driver over the synthetic
+# packet fixture. All other verification scaffolding is off.
+MCNuX::enable_interactions = yes
+MCNuX::test_synthetic_packets = yes
+MCNuX::enable_emission = no
+MCNuX::test_emission = no
+MCNuX::test_synthetic_deposit = no
+MCNuX::test_ledger_closure = no
+MCNuX::test_fluid_gather = no
+MCNuX::run_selftests = no
+
+# The pinned primary seed (the rng_seed default, restated for the
+# determinism audit).
+MCNuX::rng_seed = 1296518744
+
+# Analytic coefficient source: pure scattering for nu_e (the fixture's only
+# species). kappa_a0[0] keeps its 0 default, so the absorption channel is
+# transparent (Delta t_a = +inf) and eta = 0 (nothing consumes it here).
+MCNuX::opacity_source = "analytic"
+MCNuX::kappa_s0[0] = 5.0e-5
+
+# Flat background: the ADMBaseX defaults, restated.
+ADMBaseX::initial_data = "Cartesian Minkowski"
+ADMBaseX::initial_lapse = "one"
+ADMBaseX::initial_shift = "zero"
+
+# Uniform at-rest fluid everywhere (T0 > 0 keeps the analytic Kirchhoff
+# form well-defined even though eta is unused here).
+HydroBaseX::initial_hydro = "equilibration box"
+TestMCNuX::rho0 = 1.0e12
+TestMCNuX::T0 = 5.0
+TestMCNuX::Ye0 = 0.25
+
+# 8^3 cells over the CarpetX default domain [-1, 1]^3 (dx = 0.25; default
+# dtfac gives dt = 0.125). Four steps move every packet by at most 0.5 from
+# a seed position inside |x^i| <= 0.25, so all stay inside the domain and
+# the escape policy is never exercised.
+CarpetX::ncells_x = 8
+CarpetX::ncells_y = 8
+CarpetX::ncells_z = 8
+
+Cactus::cctk_itlast = 4
+
+IO::out_dir = $parfile
+IO::out_every = 1
+IO::parfile_write = no
+
+# Keep the column-label header but drop IOUtil's creation date, hostname, and
+# absolute parameter-file path (see unit-selftest.par).
+IO::out_fileinfo = "axis labels"
+
+CarpetX::out_metadata = no
+
+# The golden data: the per-packet diagnostic table, one file per iteration.
+CarpetX::out_tsv_vars = "
+    MCNuX::mcnux_packet_diag
+"
