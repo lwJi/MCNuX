@@ -400,6 +400,10 @@ names: benchmarks per [MCNX-VER-06]/[MCNX-VER-07]; `selftest:` legs of
 | [MCNX-GPU-05] | ownership-multibox (`OK()`-style placement check after every step) |
 | [MCNX-GPU-06] | ownership-multibox (bounded-motion audit: measured ≤ derived; regrid leg redistributes before next transport op) |
 | [MCNX-GPU-07] | gate: inspection — no host per-particle loops, no AoS container in MCNuX; mech: anti-pattern needle in both technical specs |
+| [MCNX-GPU-08] | gate: load-lifecycle check (table source + nonexistent/malformed table path aborts before evolution; valid paths read each baseline table exactly once per run via a load-count observable) |
+| [MCNX-GPU-09] | selftest: residency parity (device-view coefficients inside a packet kernel bitwise equal to host pure-function evaluation at pinned in-range points); gate: inspection — runtime table consumers receive the range-enforced wrapper, no null-view evaluator reachable |
+| [MCNX-GPU-10] | gate: guard-relaxation check (while any criterion is unmet, table-source + runtime-consumer combinations abort at startup with the documented reason; once relaxed, the same gate asserts a table-mode smoke run starts, steps, and produces finite coefficients) |
+| [MCNX-GPU-11] | gate: clamp-reporting check (all-in-range table-mode run reports exactly zero on every axis counter; pinned out-of-range fixture reports the exact expected per-axis counts through the runtime channel) |
 | [MCNX-CTX-01] | gate: build + inspection (grid access via `ghext`/AmrCore/MultiFab/`Array4`/`indextype` only); validity-machinery run |
 | [MCNX-CTX-02] | gate: configure without CarpetX fails on `REQUIRES CarpetX`; pinned ThornList builds clean |
 | [MCNX-CTX-03] | ownership-multibox scheduling-mode counter (one invocation per (patch, level), never per tile) |

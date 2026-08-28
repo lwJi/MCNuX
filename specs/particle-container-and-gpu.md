@@ -1,8 +1,9 @@
 # Particle container and GPU execution model
 
 > Technical leaf spec. Self-contained: an agent can implement the packet container
-> layout, the device-kernel execution model, the packet-id contract, and the
-> redistribution invariants from this file alone. It restates only the conventions it
+> layout, the device-kernel execution model, the packet-id contract, the
+> redistribution invariants, and the opacity-table residency layer from this file
+> alone. It restates only the conventions it
 > uses and references [conventions-and-units](./conventions-and-units.md) and
 > [rng-and-statistical-acceptance](./rng-and-statistical-acceptance.md) for the rest.
 > `README.md` is canonical if any restated convention here conflicts with it.
@@ -31,6 +32,14 @@ distributed AMR particle population well-defined:
   of local redistribution, including `Redistribute` timing under AMR.
 - The **anti-pattern warning** against the nearest in-stack particle code.
 
+This spec additionally owns the **table-residency mechanics** that
+[opacity-eos-evaluation](./opacity-eos-evaluation.md) delegates here ("Device-kernel
+execution idioms and table residency mechanics"): which production tables are loaded,
+the once-per-run load/upload lifecycle, device residency and view population for the
+baseline table-coefficient assembly, the criteria for relaxing the startup guard that
+keeps the table coefficient source unreachable at runtime until residency exists, and
+runtime clamp-counter reporting ([MCNX-GPU-08]–[MCNX-GPU-11]).
+
 Out of scope:
 
 - The physical meaning, units, and valid ranges of the packet components, and how
@@ -52,13 +61,20 @@ Out of scope:
   inherits the prohibition.
 - Concrete benchmarks and golden data
   ([verification-suite-design](./verification-suite-design.md)).
+- The table *semantics* — axis layouts and units, the WeakLibInterp kernel contracts,
+  the baseline coefficient assembly, and the table-range enforcement **policy** itself
+  ([opacity-eos-evaluation](./opacity-eos-evaluation.md)). This spec owns only how the
+  table bytes become device-resident, how the populated views reach kernels, and how
+  the policy's clamp diagnostics become runtime-observable.
 
 ## Source of truth
 
 WarpX is the **sole particle-operator execution reference** in this corpus: it is the
 reference stack's only production GPU particle code. AMReX supplies the container
-family, the tile-view contract, and the redistribution guarantee. All cited paths
-resolve under the validator's reference roots.
+family, the tile-view contract, and the redistribution guarantee. For the
+table-residency contract, WeakLibInterp is the reference and the supplier: it is
+consumed, never modified, and its readers/residency helpers are the load-and-upload
+surface MCNuX calls. All cited paths resolve under the validator's reference roots.
 
 - `warpx/Source/Particles/WarpXParticleContainer.H` — the production pure-SoA container:
   `class WarpXParticleContainer : public amrex::ParticleContainerPureSoA<PIdx::nattribs, 0, …>`
@@ -104,6 +120,24 @@ resolve under the validator's reference roots.
 - `amrex/Tests/Particles/SOAParticle/main.cpp` — the generic pure-SoA structure:
   `ParticleContainerPureSoA<4, 2, …>`, `ptd` captured into `ParallelFor`,
   `ParticleType p(ptd, ip)` proxy access.
+- `WeakLibInterp/src/io/wli_io_eos.H` / `WeakLibInterp/src/io/wli_io_opacity.H` — the
+  HDF5 reader entry points (`wli::io::read_eos_table`, `read_emab_table`,
+  `read_scat_iso_table`, …): host structs holding flat log-stored value buffers,
+  recorded extents, and separate additive offsets, shaped so the residency upload
+  consumes them with no adapter layer; readers throw on a malformed/absent file.
+- `WeakLibInterp/src/io/wli_io_bcast_detail.H` — the inherited parallel-distribution
+  contract: only the I/O root rank opens/reads the `.h5` file, a status flag is
+  broadcast first (a root-side failure fails collectively, no hang), then metadata and
+  arrays, so every rank ends byte-identical; serial builds run the same path.
+- `WeakLibInterp/src/core/wli_table.H` — the persistent-resident-table model:
+  `wli::ResidentTable` (arena-backed `amrex::Gpu::DeviceVector<double>`, filled once on
+  the host, uploaded once via `Gpu::htod_memcpy`, resident for the run) handing out the
+  trivially-copyable raw-pointer-plus-extents `wli::TableView` for by-value kernel
+  capture — the residency exemplar.
+- `WeakLibInterp/test/test_parallelfor_wrappers.cpp` — the device consumption pattern:
+  a host-built `TableView` captured by value into one `amrex::ParallelFor`, with
+  bit-identity between the host loop and the device launcher — the residency-parity
+  verification exemplar.
 - Anti-pattern provenance (execution side; the object-access side is owned by
   [carpetx-thorn-integration](./carpetx-thorn-integration.md)):
   `CarpetX/CarpetX/src/interp.hxx` — legacy AoS `amrex::AmrParticleContainer<3, 2>`
@@ -123,6 +157,17 @@ container construction), and the grid-function `MultiFab`s whose `Array4` views 
 gather/deposition kernels consume. Output: the packet container itself — the sole
 authoritative storage of the packet population — and its tile views, consumed by every
 transport kernel.
+
+Table-mode inputs (live only when the table coefficient source of
+[opacity-eos-evaluation](./opacity-eos-evaluation.md) is selected): filesystem paths to
+the baseline production tables `wl-EOS-SFHo-15-25-50.h5`,
+`wl-Op-SFHo-15-25-50-E40-EmAb.h5`, and `wl-Op-SFHo-15-25-50-E40-Iso.h5` (the
+provenance-pinned tables whose structure the
+[opacity-eos-evaluation](./opacity-eos-evaluation.md) snapshots anchor), supplied as
+run parameters. Table-mode outputs: the device-resident table storage and the
+populated, trivially-copyable view bundle that the baseline table-coefficient assembly
+consumes inside packet kernels, plus the runtime clamp-count diagnostic of
+[MCNX-GPU-11].
 
 ### Packet component schema (storage mapping of the PKT state table)
 
@@ -219,6 +264,65 @@ and compile-time components are equally admissible.
   What *is* validly taken from it — where the driver's grid objects live — is owned by
   [carpetx-thorn-integration](./carpetx-thorn-integration.md).
 
+- **[MCNX-GPU-08] Baseline table set and load lifecycle.** When a run selects the table
+  coefficient source and enables any consumer that evaluates coefficients at runtime
+  (emission, interactions), MCNuX loads exactly the three baseline production tables —
+  `wl-EOS-SFHo-15-25-50.h5` (EOS chemical potentials),
+  `wl-Op-SFHo-15-25-50-E40-EmAb.h5`, and `wl-Op-SFHo-15-25-50-E40-Iso.h5` — through the
+  WeakLibInterp reader entry points (`wli::io::read_eos_table`, `read_emab_table`,
+  `read_scat_iso_table`; WeakLibInterp is consumed, never modified, and its root-read +
+  broadcast contract is inherited: only the I/O root rank opens a file, every rank ends
+  byte-identical, and a root-side failure fails collectively). Binding lifecycle: the
+  table paths are run parameters; loading and upload happen **once per run, at
+  startup**, before the first transport step consumes any coefficient; a missing,
+  unreadable, or structurally malformed table is a **hard failure before evolution
+  begins** — never a silent fallback to the analytic source or to zero coefficients.
+  The NES/Pair/Brem tables are **not** resident at baseline (their rate assembly is a
+  structured open question of
+  [opacity-eos-evaluation](./opacity-eos-evaluation.md)); making them resident extends
+  this requirement explicitly, not silently.
+
+- **[MCNX-GPU-09] Device residency and view population.** The loaded table content is
+  uploaded host→device once and stays resident for the entire run (the WeakLibInterp
+  persistent-resident-table model: arena-backed device storage filled once, kernels
+  capturing raw-pointer-plus-extents views by value). Binding: every pointer in the
+  populated view bundle consumed by the baseline table-coefficient assembly is
+  device-dereferenceable inside packet kernels; the bundle is trivially copyable and
+  captured by value per [MCNX-GPU-02]; the resident values, axes, and additive offsets
+  are exactly the reader-delivered content in the reader-delivered (log/linear) storage
+  spaces — no re-derivation, no per-step re-read or re-upload, and no host round-trip
+  of table data after the upload. Runtime table consumers receive the range-enforced
+  wrapper of [opacity-eos-evaluation](./opacity-eos-evaluation.md) ([MCNX-OPA-06])
+  around the populated views, never the bare assembly; a default-constructed
+  (null-view) table evaluator must be unreachable in any configuration where the table
+  source is selected.
+
+- **[MCNX-GPU-10] Table-mode guard-relaxation criteria.** Today a startup
+  (paramcheck-time) guard aborts any run combining the table coefficient source with a
+  runtime coefficient consumer, precisely because no residency layer exists. Binding:
+  that guard may be relaxed — and, once the criteria hold, MUST be relaxed so the table
+  source becomes runnable — exactly when all of the following hold, and not before:
+  (a) [MCNX-GPU-08] and [MCNX-GPU-09] are implemented and their verification hooks
+  pass; (b) the table paths are declared run parameters and validated at startup under
+  the hard-failure rule of [MCNX-GPU-08]; (c) every runtime dispatch site that can
+  evaluate table coefficients receives the populated, range-enforced evaluator (no
+  null-view evaluator reachable); (d) the clamp-counter reporting of [MCNX-GPU-11] is
+  observable. Partial relaxation (e.g. one consumer at a time) is admissible provided
+  each relaxed combination satisfies (a)–(d) for its own dispatch sites; combinations
+  not yet satisfying them keep aborting at startup, before any evolution.
+
+- **[MCNX-GPU-11] Runtime clamp-counter reporting.** The per-axis clamp counters
+  mandated by [opacity-eos-evaluation](./opacity-eos-evaluation.md) ([MCNX-OPA-06]
+  "Diagnostics") are aggregated across all runtime table evaluations — correctly under
+  device-parallel execution (unordered atomic or reduction accumulation is acceptable;
+  lost updates are not) — and surfaced as an observable runtime diagnostic (reduction
+  output, diagnostic variable, or logged per-step/per-run summary; the channel is
+  free). Binding observables: a run whose queried states all lie in range reports
+  exactly zero clamps on every axis; every clamp event is counted exactly once, so
+  pinned out-of-range fixtures have exact expected counts; the transparency-floor
+  outcome is not counted as a clamp (no table evaluation occurs below the floor, per
+  the policy).
+
 ### Conventions restated (the subset this leaf uses)
 
 - Packet physical components, units, and valid ranges are owned by
@@ -262,13 +366,31 @@ and compile-time components are equally admissible.
   the Cactus harness defaults `ABSTOL=RELTOL=1e-12`. Grid tallies deposited by
   unordered atomics are compared across launch configurations only with norm-based
   tolerances (owned by the comparing spec), never bitwise.
+- **Load lifecycle (exact).** With the table source selected and a nonexistent or
+  malformed table path, the run aborts before evolution begins (exact-criterion gate);
+  with valid paths, each baseline table is read exactly once per run (observable via
+  the reader's instrumented open count or an equivalent load-count observable).
+- **Residency parity (exact tier).** At a pinned set of in-range
+  (species, E, fluid-state) points, coefficients evaluated through the device-resident
+  views inside a packet kernel are bitwise identical to the host pure-function
+  evaluation over the same reader-delivered content (the WeakLibInterp
+  `test_parallelfor_wrappers.cpp` host/device parity pattern).
+- **Guard-relaxation gate (exact criterion).** While any [MCNX-GPU-10] criterion is
+  unmet, the gate asserts that the table-source + runtime-consumer combination aborts
+  at startup with the documented reason; once a combination is relaxed, the same gate
+  flips to asserting that a table-mode smoke run starts, steps, and produces finite
+  coefficients.
+- **Clamp reporting (exact).** A table-mode run whose queried states are all in range
+  reports exactly zero on every axis counter; a pinned out-of-range fixture reports the
+  exact expected per-axis counts through the runtime reporting channel of
+  [MCNX-GPU-11].
 
 ### Mechanical (validator)
 
 `bash tools/validate_specs.sh` asserts this file carries the 7 mandated sections in
 order; contains the literal `ParticleContainerPureSoA` and the anti-pattern phrase
 `are an anti-pattern for GPU particle operators and are not adopted`; that its cited
-`warpx/`, `amrex/`, and `CarpetX/` paths resolve; and that its `[MCNX-GPU-NN]` ids are
+`warpx/`, `amrex/`, `CarpetX/`, and `WeakLibInterp/` paths resolve; and that its `[MCNX-GPU-NN]` ids are
 declared here and covered by the
 [verification-suite-design](./verification-suite-design.md) matrix.
 
@@ -288,6 +410,17 @@ declared here and covered by the
   conservation ledger of
   [hydro-coupling-source-terms](./hydro-coupling-source-terms.md) holds.
 - Host-side mirrors for I/O, checkpointing, and debugging (non-authoritative copies).
+- Table-residency mechanics beyond the [MCNX-GPU-08/09] contract: arena choice, the
+  exact upload point within startup, whether `wli::ResidentTable` is used directly or
+  an equivalent owner is built, host-mirror retention after upload, and view-bundle
+  assembly order — this preserves the Implementation freedom of
+  [opacity-eos-evaluation](./opacity-eos-evaluation.md) (the contract pins the tables,
+  the lifecycle, and the observables, not the mechanism).
+- The clamp-counter aggregation mechanism (device scalar + atomics, per-tile
+  reduction, host accumulation of per-launch partials) and the reporting channel,
+  format, and cadence, subject to the [MCNX-GPU-11] observables.
+- Table-path parameter names, defaults, and how startup validation is staged before
+  the hard failure fires.
 
 ## Open questions / assumptions
 
@@ -309,3 +442,16 @@ declared here and covered by the
   single-rate stepping (`CarpetX::use_subcycling = no`, pinned in
   [carpetx-thorn-integration](./carpetx-thorn-integration.md)). Subcycled transport
   would need per-level redistribution cadence rules specified here before adoption.
+- **Assumption: tables are grid-independent.** The resident tables are functions of
+  the fluid state only, so regridding, level changes, and redistribution never touch
+  the residency layer; nothing re-uploads on regrid.
+- **Assumption: restart re-runs the load lifecycle.** Table bytes are not
+  checkpointed; a restarted run re-executes the [MCNX-GPU-08] load/upload from the
+  parameter paths, and the provenance pin of the production tables (the committed
+  snapshots of [opacity-eos-evaluation](./opacity-eos-evaluation.md)) makes the
+  reloaded content identical. Clamp counters restart from zero unless the reporting
+  channel states otherwise.
+- **Open question: NES/Pair/Brem residency.** Deliberately deferred with the rate
+  assembly of [opacity-eos-evaluation](./opacity-eos-evaluation.md); when that open
+  question resolves, the additional tables and any per-table memory-budget policy are
+  added to [MCNX-GPU-08]/[MCNX-GPU-09] explicitly.
