@@ -36,11 +36,14 @@ BOOLEAN test_synthetic_deposit "Deposit a synthetic, iteration-scaled event list
 # cancels the event-side packet total dX to relative 1e-13 of the gross event
 # activity (eps0-floored), mirrors the verdict table into
 # MCNuX::mcnux_ledger_diag, and aborts on any failing channel. Off by default
-# — the audit is verification scaffolding over the synthetic event list, not
-# physics — and STEERABLE=NEVER, because the table's storage and the
-# routine's scheduling are decided from it at startup. Meaningful only
-# together with test_synthetic_deposit (the event side is the shared
-# synthetic list).
+# — the audit is verification scaffolding, not physics — and STEERABLE=NEVER,
+# because the table's storage and the routine's scheduling are decided from
+# it at startup. The event side folds the contributors actually active in the
+# run: the shared synthetic list (with test_synthetic_deposit) and the
+# production emission loop's per-step audit (with enable_emission); the
+# grid-side dV*dt multiplier follows the active contributor's own deposit
+# normalization, so combining both contributors under the closure is
+# forbidden at PARAMCHECK (mcnux_paramcheck.cxx).
 
 BOOLEAN test_ledger_closure "Audit the per-step five-channel conservation-ledger closure of the synthetic event list against the deposited source terms" STEERABLE=NEVER
 {

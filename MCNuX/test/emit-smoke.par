@@ -41,12 +41,17 @@ ActiveThorns = "
 Cactus::presync_mode = "mixed-error"
 
 # The subject of this benchmark: the production emission loop plus its
-# diagnostic mirror. All other verification scaffolding is off.
+# diagnostic mirror, with the [MCNX-HYD-05] conservation-ledger closure
+# auditing the real emission events each step (event side from
+# emission_step_audit(), grid side multiplied by the real cell volume
+# dV = 0.25^3 times dt = 0.125; any failing channel aborts the run). The
+# synthetic fixtures stay off (test_synthetic_deposit with enable_emission
+# under the closure is forbidden at PARAMCHECK — different dV*dt pairs).
 MCNuX::enable_emission = yes
 MCNuX::test_emission = yes
 MCNuX::test_synthetic_packets = no
 MCNuX::test_synthetic_deposit = no
-MCNuX::test_ledger_closure = no
+MCNuX::test_ledger_closure = yes
 MCNuX::run_selftests = no
 
 # The pinned primary seed (the rng_seed default, restated) and the default
@@ -94,7 +99,9 @@ IO::out_fileinfo = "axis labels"
 
 CarpetX::out_metadata = no
 
-# The golden data: the per-packet diagnostic table, one file per iteration.
+# The golden data: the per-packet diagnostic table and the five-channel
+# ledger-closure verdict table, one file per iteration.
 CarpetX::out_tsv_vars = "
     MCNuX::mcnux_packet_diag
+    MCNuX::mcnux_ledger_diag
 "
