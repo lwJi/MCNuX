@@ -176,15 +176,21 @@ void fill_packet_diag(const MetricGroups &groups, const PacketDiagColumns &cols,
 // Synthetic packet fixture
 // ---------------------------------------------------------------------------
 
-// The deterministic seed set of the `minkowski-freestream` benchmark (and of
-// T16's Schwarzschild legs): eight packets with exact binary-fraction
-// positions inside |x^i| <= 0.25 and momenta spanning the six axis
-// directions (at four different magnitudes — the coordinate speed must be 1
-// regardless) plus two oblique directions. Over the benchmark's 4 x 0.125
-// coordinate time every packet stays well inside the [-1, 1]^3 domain, so
-// the escape policy is never exercised. Row index in the diagnostic table =
-// packet id - 1 = fixture index. Function-local constexpr (the
-// mcnux_srcterms.cxx CUDA note on namespace-scope struct constants).
+// Two deterministic seed sets, selected by MCNuX::synthetic_packet_fixture
+// (exact binary fractions in both; row index in the diagnostic table =
+// packet id - 1 = fixture index; function-local constexpr per the
+// mcnux_srcterms.cxx CUDA note on namespace-scope struct constants):
+//   * "minkowski" (the `minkowski-freestream` benchmark): eight packets
+//     inside |x^i| <= 0.25 with momenta spanning the six axis directions
+//     (at four different magnitudes — the coordinate speed must be 1
+//     regardless) plus two oblique directions; over the benchmark's
+//     4 x 0.125 coordinate time every packet stays well inside the
+//     [-1, 1]^3 domain, so the escape policy is never exercised.
+//   * "schwarzschild" (the `schwarzschild-pt` p_t-drift legs): eight
+//     packets at isotropic r in [6.06, 9.53] M with dominant
+//     outgoing-radial momenta; over the benchmark's T = 100 M none escapes
+//     the [2, 130]^3 domain (final radii ~100-105 with every coordinate
+//     inside the box, measured at capture).
 namespace {
 
 struct PacketFixture {
@@ -199,7 +205,7 @@ extern "C" void MCNuX_SeedSyntheticPackets(CCTK_ARGUMENTS) {
   DECLARE_CCTK_PARAMETERS;
 
   constexpr int nfixture = 8;
-  constexpr PacketFixture fixture[nfixture] = {
+  constexpr PacketFixture fixture_minkowski[nfixture] = {
       {0.125, 0.0, 0.0, 1.0, 0.0, 0.0},
       {-0.125, 0.0, 0.0, -1.0, 0.0, 0.0},
       {0.0, 0.125, 0.0, 0.0, 2.0, 0.0},
@@ -209,6 +215,20 @@ extern "C" void MCNuX_SeedSyntheticPackets(CCTK_ARGUMENTS) {
       {0.25, -0.25, 0.125, 0.5, -0.25, 0.125},
       {-0.0625, 0.1875, -0.25, -0.375, 0.75, 0.5},
   };
+  constexpr PacketFixture fixture_schwarzschild[nfixture] = {
+      {3.5, 3.5, 3.5, 1.0, 1.0, 1.0},
+      {4.5, 4.5, 4.5, 0.5, 0.5, 0.5},
+      {5.5, 5.5, 5.5, 2.0, 2.0, 2.0},
+      {6.0, 4.0, 3.0, 1.5, 1.0, 0.75},
+      {8.0, 3.0, 3.0, 1.0, 0.5, 0.25},
+      {4.0, 6.0, 3.0, 0.5, 1.5, 0.5},
+      {3.0, 4.0, 7.0, 0.25, 0.5, 1.0},
+      {5.0, 5.0, 2.5, 1.0, 1.0, 0.5},
+  };
+  const PacketFixture *const fixture =
+      CCTK_EQUALS(synthetic_packet_fixture, "schwarzschild")
+          ? fixture_schwarzschild
+          : fixture_minkowski;
 
   const int nrows = packet_diag_size();
   if (nrows != nfixture)
@@ -264,9 +284,11 @@ extern "C" void MCNuX_SeedSyntheticPackets(CCTK_ARGUMENTS) {
 // ---------------------------------------------------------------------------
 
 // One transport step of free streaming for every packet: per tile, one
-// device kernel applying geodesic_step (RK4 on the [MCNX-GEO-01] RHS with
-// the trilinear gather of [MCNX-GEO-03]) over the coarsest-level Delta t
-// (cctk_delta_time in level/global mode, the cadence contract of
+// device kernel applying geodesic_step_cellwise (RK4 on the [MCNX-GEO-01]
+// RHS with the trilinear gather of [MCNX-GEO-03], sub-stepped at cell-face
+// crossings so every RK4 piece integrates one smooth trilinear polynomial —
+// see mcnux_geodesic.hxx) over the coarsest-level Delta t (cctk_delta_time
+// in level/global mode, the cadence contract of
 // mcnux_cadence.cxx). Afterwards a plain Redistribute() re-establishes
 // ownership (packets that left the domain are dropped by AMReX; escape
 // tallies are a later task's, as is the bounded/local redistribution of
@@ -287,7 +309,7 @@ extern "C" void MCNuX_GeodesicPush(CCTK_ARGUMENTS) {
                      ptd.rdata(PIdx::z)[ip]};
       double p[3] = {ptd.rdata(PIdx::px)[ip], ptd.rdata(PIdx::py)[ip],
                      ptd.rdata(PIdx::pz)[ip]};
-      geodesic_step(gather, x, p, dt);
+      geodesic_step_cellwise(gather, x, p, dt);
       ptd.rdata(PIdx::x)[ip] = x[0];
       ptd.rdata(PIdx::y)[ip] = x[1];
       ptd.rdata(PIdx::z)[ip] = x[2];

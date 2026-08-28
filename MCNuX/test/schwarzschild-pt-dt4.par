@@ -1,0 +1,86 @@
+# schwarzschild-pt-dt4 — the Delta t = M/16 leg of the schwarzschild-pt
+# p_t-drift convergence study of specs/geodesic-propagation.md and
+# specs/verification-suite-design.md. Identical to schwarzschild-pt.par
+# (see its header for the full description, domain rationale, and the
+# drift/order numbers measured at golden capture) except for
+# CarpetX::timestep = 0.0625, Cactus::cctk_itlast = 1600, and
+# IO::out_every = 1600: same fixed 32^3 grid over [2, 130]^3 (dx = 4 M),
+# same T = itlast * Delta t = 100 M, golden MCNuX::mcnux_packet_diag at
+# iteration 0 and the final iteration.
+
+ActiveThorns = "
+    CarpetX
+    IOUtil
+    ODESolvers
+    ADMBaseX
+    HydroBaseX
+    MCNuX
+    TestMCNuX
+"
+
+# Mandatory for any MCNuX run: CarpetX's own CCTK_PARAMCHECK routine rejects
+# every other presync mode.
+Cactus::presync_mode = "mixed-error"
+
+# The subject of this benchmark: the Schwarzschild synthetic packet fixture
+# and its substepped push. The other verification scaffolding is off.
+MCNuX::test_synthetic_packets = yes
+MCNuX::synthetic_packet_fixture = "schwarzschild"
+MCNuX::test_synthetic_deposit = no
+MCNuX::run_selftests = no
+
+# Zero opacities (free streaming): the analytic coefficient source with its
+# default kappa_a0 = kappa_s0 = 0. Nothing consumes the coefficients here.
+MCNuX::opacity_source = "analytic"
+
+# The curved background: the TestMCNuX isotropic Schwarzschild writers
+# (see schwarzschild-id.par), M = 1.
+ADMBaseX::initial_data = "Schwarzschild"
+ADMBaseX::initial_lapse = "Schwarzschild"
+ADMBaseX::initial_shift = "zero"
+TestMCNuX::M = 1.0
+
+# Offset single-level box [2, 130]^3, 32^3 cells (dx = 4): fixed across the
+# three legs (see above).
+CarpetX::xmin = 2.0
+CarpetX::ymin = 2.0
+CarpetX::zmin = 2.0
+CarpetX::xmax = 130.0
+CarpetX::ymax = 130.0
+CarpetX::zmax = 130.0
+CarpetX::ncells_x = 32
+CarpetX::ncells_y = 32
+CarpetX::ncells_z = 32
+
+# The leg's time step, set explicitly (never via dtfac, which would couple
+# Delta t to the fixed dx): base leg Delta t = M/4 over 400 iterations (this leg: see the header),
+# T = 100 M.
+CarpetX::timestep_choice = "timestep"
+CarpetX::timestep = 0.0625
+Cactus::cctk_itlast = 1600
+
+IO::out_dir = $parfile
+IO::out_every = 1600
+IO::parfile_write = no
+
+# Keep the column-label header but drop IOUtil's creation date, hostname, and
+# absolute parameter-file path (see unit-selftest.par).
+IO::out_fileinfo = "axis labels"
+
+CarpetX::out_metadata = no
+
+# The default origin-anchored 1D output lines lie outside the offset box;
+# anchor them on an interior vertex (dx = 4: 66 = 2 + 16*4). Only the
+# packet-diag grid array is output, but the anchors must still be valid.
+IO::out_xline_y = 66.0
+IO::out_xline_z = 66.0
+IO::out_yline_x = 66.0
+IO::out_yline_z = 66.0
+IO::out_zline_x = 66.0
+IO::out_zline_y = 66.0
+
+# The golden data: the per-packet diagnostic table at iteration 0 and the
+# final iteration.
+CarpetX::out_tsv_vars = "
+    MCNuX::mcnux_packet_diag
+"

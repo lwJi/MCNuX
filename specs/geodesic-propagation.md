@@ -155,6 +155,21 @@ tallies (per-species energy and number), per the `README.md` boundary policy.
 - **Convergence study (order ≥ 2).** On the Schwarzschild background, integrate a
   pinned set of trajectories at `Δt, Δt/2, Δt/4`; the observed convergence order of
   the `p_t` drift and of the position error is ≥ 2.
+- **Smoothness-boundary caveat (measured, binding on how drift is observed).** The
+  `p_t` drift and position error are smooth functions of `Δt` only if every
+  integrator (sub-)step integrates a single smooth piece of the gathered metric. Any
+  piecewise-polynomial gather satisfying [MCNX-GEO-03] — including the minimum
+  admissible trilinear interpolant — is merely `C0` across cell faces: its
+  derivative fields jump by `O(1)` there, so an integrator stepping blindly across a
+  face integrates the wrong polynomial's `dp_i/dt` for the overshoot interval and
+  injects a random-sign per-crossing error. Measured on the Schwarzschild benchmark,
+  blind RK4 across faces degrades the accumulated `p_t` drift to a **first-order
+  random walk** (per-packet order estimates scatter wildly, including negative
+  values), making the order-≥ 2 acceptance of [MCNX-GEO-04]/[MCNX-GEO-05]
+  unachievable in principle regardless of the integrator's nominal order. The
+  convergence acceptances above therefore presuppose face-aware handling of gather
+  smoothness boundaries (see Implementation freedom); they are acceptances on the
+  push as a whole, not on the ODE stepper in isolation.
 - **Schwarzschild `p_t` conservation (golden parity, 1e-12 harness).** The
   deterministic benchmark of [verification-suite-design](./verification-suite-design.md)
   (fixed initial packets, no interactions, `TestMCNuX` Schwarzschild data) checks the
@@ -174,6 +189,31 @@ order; contains the restated-equation anchors `dx^i/dt = γ^{ij} p_j/p^t − β^
 
 - The integrator (RK2, RK4, symplectic, adaptive substepping) and step-subdivision
   strategy, subject to [MCNX-GEO-04].
+- **Face-aware substepping (accepted freedom for piecewise gathers).** With a
+  piecewise-polynomial gather, splitting the push at gather smoothness boundaries —
+  each sub-step integrating one anchored interpolation piece (a single `C∞`
+  polynomial, smoothly extrapolated if intermediate integrator stages overshoot the
+  face) — is the accepted way to satisfy [MCNX-GEO-03]'s
+  one-gather-scheme-per-right-hand-side-evaluation clause and to make the
+  convergence observables of [MCNX-GEO-04]/[MCNX-GEO-05] well-defined. Two
+  constraints on this freedom: (a) **crossing-time location accuracy bounds the
+  observed push order** — because derivative fields jump `O(1)` across a face even
+  though values are `C0`, an `O(Δt²)` crossing-time error injects `O(Δt²)`
+  random-sign per-crossing errors, capping the measured order near 2; a claimed
+  order above that requires landing crossings correspondingly more accurately (e.g.
+  iterative refinement placing the sub-step end within a few ulps of the face) —
+  and (b) a step that crosses no boundary must reduce arithmetically to the
+  corresponding plain single-piece step, so face-aware handling is observationally
+  inert away from faces (flat-spacetime exactness is unaffected).
+- **Plain (non-face-aware) stepping stays valid for exit-bounded segments.** A
+  consumer whose push segments already terminate at cell exits — e.g. the
+  interaction episode driver of
+  [neutrino-matter-interactions](./neutrino-matter-interactions.md), which
+  propagates one in-cell segment at a time — never steps blindly across a
+  smoothness boundary, so the plain single-piece step remains a valid integrator
+  there; the accuracy of its segment-end (cell-exit) times then plays the role of
+  crossing-time accuracy in constraint (a) if such a consumer is ever held to a
+  convergence acceptance.
 - The gather interpolation order beyond the trilinear minimum, and whether derivatives
   come from differentiating the interpolant or from interpolated finite differences,
   subject to [MCNX-GEO-03].

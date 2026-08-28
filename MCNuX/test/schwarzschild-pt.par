@@ -1,0 +1,133 @@
+# schwarzschild-pt — Schwarzschild p_t-drift benchmark of
+# specs/geodesic-propagation.md (Verification: the curved-background
+# conservation observable [MCNX-GEO-05] under the production push) and
+# specs/verification-suite-design.md (the schwarzschild-pt row): the base
+# Delta t leg of the three-leg convergence study (siblings:
+# schwarzschild-pt-dt2.par, schwarzschild-pt-dt4.par — identical except for
+# CarpetX::timestep, Cactus::cctk_itlast, IO::out_every).
+#
+# The "schwarzschild" synthetic fixture (eight packets at isotropic
+# r in [6, 10] M, dominant outgoing-radial momenta, exact binary fractions)
+# is pushed by the face-aware substepped RK4 geodesic push
+# (geodesic_step_cellwise, mcnux_geodesic.hxx) on the TestMCNuX isotropic
+# Schwarzschild background (M = 1) for T = itlast * Delta t = 100 M. The
+# golden observable is MCNuX::mcnux_packet_diag (position, lower momentum,
+# covariant energy p_t) at iteration 0 and the final iteration; on the
+# static background p_t is conserved along every geodesic, so the relative
+# drift |p_t(T) - p_t(0)| / |p_t(0)| measures the integrator+gather error.
+#
+# The spatial resolution is FIXED across the three legs (32 cells over
+# [2, 130]^3, dx = 4 M): the study isolates the Delta t order of the
+# integrator from the O(dx^2) trilinear-gather truncation, which is a
+# constant background error common to all legs. The domain is entirely in
+# isotropic r > M/2 ([MCNX-VER-03]; the TestMCNuX writers divide by r, so
+# the box must never contain the origin) and large enough that no fixture
+# packet escapes over T = 100 M (seeded at r in [6.06, 9.53]; final
+# positions at r ~ 100-105, every coordinate inside [2, 130]).
+#
+# The legs are Delta t = M/4, M/8, M/16 (this file, -dt2, -dt4). With the
+# Newton-polished face crossings of geodesic_step_cellwise the drift at
+# Delta t = M/16 already sits at 1e-14..3e-13, so still-finer legs (M/32,
+# M/64 were measured) saturate the double-precision accumulation floor
+# (~1e-15 over thousands of steps) and their drift ratios become roundoff
+# noise; M/4..M/16 keeps all three legs in the asymptotic regime with the
+# finest leg >~ 10x above the floor.
+#
+# Measured at golden capture (drift = |p_t(T)-p_t(0)|/|p_t(0)| per packet;
+# legs Delta t = M/4, M/8, M/16; observed order = log2 of successive
+# drift ratios):
+#   pkt 1  8.914e-12  3.084e-13  1.133e-14   orders 4.85 4.77
+#   pkt 2  2.563e-12  3.477e-13  2.926e-14   orders 2.88 3.57
+#   pkt 3  2.211e-12  2.153e-13  1.213e-14   orders 3.36 4.15
+#   pkt 4  2.744e-11  1.712e-12  1.074e-13   orders 4.00 3.99
+#   pkt 5  3.862e-11  2.403e-12  1.502e-13   orders 4.01 4.00
+#   pkt 6  6.887e-11  4.376e-12  2.700e-13   orders 3.98 4.02
+#   pkt 7  4.664e-11  2.958e-12  1.844e-13   orders 3.98 4.00
+#   pkt 8  3.728e-11  2.777e-12  1.750e-13   orders 3.75 3.99
+# Base-leg drift <= 6.9e-11 on every packet (design bound 1e-5); max-norm
+# orders 3.98, 4.02 (required >= 2; every per-packet order >= 2.88). No
+# packet escapes (no all-zero row; final radii in [100.2, 104.6]). Each
+# leg's final TSV time column equals itlast * Delta t = 100.
+#
+# ODESolvers must be active: ADMBaseX schedules its initial-data groups only
+# IN ODESolvers_Initial when ODESolvers is active, and the push reads the
+# metric and lapse. With no evolved variables ODESolvers_Solve only warns.
+#
+# No interactions, no emission, no RNG draw: the run is fully deterministic.
+
+ActiveThorns = "
+    CarpetX
+    IOUtil
+    ODESolvers
+    ADMBaseX
+    HydroBaseX
+    MCNuX
+    TestMCNuX
+"
+
+# Mandatory for any MCNuX run: CarpetX's own CCTK_PARAMCHECK routine rejects
+# every other presync mode.
+Cactus::presync_mode = "mixed-error"
+
+# The subject of this benchmark: the Schwarzschild synthetic packet fixture
+# and its substepped push. The other verification scaffolding is off.
+MCNuX::test_synthetic_packets = yes
+MCNuX::synthetic_packet_fixture = "schwarzschild"
+MCNuX::test_synthetic_deposit = no
+MCNuX::run_selftests = no
+
+# Zero opacities (free streaming): the analytic coefficient source with its
+# default kappa_a0 = kappa_s0 = 0. Nothing consumes the coefficients here.
+MCNuX::opacity_source = "analytic"
+
+# The curved background: the TestMCNuX isotropic Schwarzschild writers
+# (see schwarzschild-id.par), M = 1.
+ADMBaseX::initial_data = "Schwarzschild"
+ADMBaseX::initial_lapse = "Schwarzschild"
+ADMBaseX::initial_shift = "zero"
+TestMCNuX::M = 1.0
+
+# Offset single-level box [2, 130]^3, 32^3 cells (dx = 4): fixed across the
+# three legs (see above).
+CarpetX::xmin = 2.0
+CarpetX::ymin = 2.0
+CarpetX::zmin = 2.0
+CarpetX::xmax = 130.0
+CarpetX::ymax = 130.0
+CarpetX::zmax = 130.0
+CarpetX::ncells_x = 32
+CarpetX::ncells_y = 32
+CarpetX::ncells_z = 32
+
+# The leg's time step, set explicitly (never via dtfac, which would couple
+# Delta t to the fixed dx): base leg Delta t = M/4 over 400 iterations,
+# T = 100 M.
+CarpetX::timestep_choice = "timestep"
+CarpetX::timestep = 0.25
+Cactus::cctk_itlast = 400
+
+IO::out_dir = $parfile
+IO::out_every = 400
+IO::parfile_write = no
+
+# Keep the column-label header but drop IOUtil's creation date, hostname, and
+# absolute parameter-file path (see unit-selftest.par).
+IO::out_fileinfo = "axis labels"
+
+CarpetX::out_metadata = no
+
+# The default origin-anchored 1D output lines lie outside the offset box;
+# anchor them on an interior vertex (dx = 4: 66 = 2 + 16*4). Only the
+# packet-diag grid array is output, but the anchors must still be valid.
+IO::out_xline_y = 66.0
+IO::out_xline_z = 66.0
+IO::out_yline_x = 66.0
+IO::out_yline_z = 66.0
+IO::out_zline_x = 66.0
+IO::out_zline_y = 66.0
+
+# The golden data: the per-packet diagnostic table at iteration 0 and the
+# final iteration.
+CarpetX::out_tsv_vars = "
+    MCNuX::mcnux_packet_diag
+"

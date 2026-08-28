@@ -45,6 +45,7 @@
 #include <AMReX_REAL.H>
 
 #include <cmath>
+#include <limits>
 #include <type_traits>
 
 namespace MCNuX {
@@ -244,18 +245,35 @@ struct VertexMetricGather {
   double prob_lo[3];
   double dx[3];
 
+  // Un-pinned entry point: floor the anchor from the position, then sample.
+  // f[d] = s - fl with fl = floor(s) equals s - double(i0[d]) bitwise (the
+  // int round-trips exactly), so this path is arithmetic-identical to the
+  // pre-at_anchor single-function form.
   AMREX_GPU_HOST_DEVICE MetricSnapshot operator()(double x, double y,
                                                   double z) const noexcept {
     using std::floor;
     const double pos[3] = {x, y, z};
     int i0[3];
+    for (int d = 0; d < 3; ++d)
+      i0[d] = static_cast<int>(floor((pos[d] - prob_lo[d]) / dx[d]));
+    return at_anchor(i0, x, y, z);
+  }
+
+  // Anchored evaluation: sample with a CALLER-pinned anchor cell i0. The
+  // weight f[d] = (x_d - prob_lo_d)/dx_d - i0_d is NOT clamped to [0, 1]:
+  // for positions slightly outside the anchored cell the trilinear
+  // polynomial of that cell extrapolates smoothly (each sub-step of the
+  // cellwise integrator below then integrates ONE C-infinity polynomial,
+  // satisfying the one-scheme-per-RHS contract of [MCNX-GEO-03]), and the
+  // difference-form lerp keeps constant fields bitwise exact for ANY f —
+  // the flat-exactness mechanism documented above is anchor-independent.
+  AMREX_GPU_HOST_DEVICE MetricSnapshot at_anchor(const int i0[3], double x,
+                                                 double y,
+                                                 double z) const noexcept {
+    const double pos[3] = {x, y, z};
     double f[3];
-    for (int d = 0; d < 3; ++d) {
-      const double s = (pos[d] - prob_lo[d]) / dx[d];
-      const double fl = floor(s);
-      i0[d] = static_cast<int>(fl);
-      f[d] = s - fl;
-    }
+    for (int d = 0; d < 3; ++d)
+      f[d] = (pos[d] - prob_lo[d]) / dx[d] - i0[d];
     AMREX_ASSERT(metric.contains(i0[0], i0[1], i0[2]) &&
                  metric.contains(i0[0] + 1, i0[1] + 1, i0[2] + 1) &&
                  lapse.contains(i0[0], i0[1], i0[2]) &&
@@ -338,8 +356,233 @@ private:
   }
 };
 
-static_assert(std::is_trivially_copyable_v<VertexMetricGather>,
-              "[MCNX-GPU-02] the gather functor is captured by value into "
+// Anchor-pinning adapter: presents one trilinear piece of the vertex gather
+// as a position-only gather, so the geodesic_step_with template above is
+// reused UNMODIFIED as the per-sub-step integrator of the cellwise driver.
+struct AnchoredVertexGather {
+  VertexMetricGather g;
+  int i0[3];
+
+  AMREX_GPU_HOST_DEVICE MetricSnapshot operator()(double x, double y,
+                                                  double z) const noexcept {
+    return g.at_anchor(i0, x, y, z);
+  }
+};
+
+namespace detail {
+
+// Minimum time along the FROZEN coordinate velocity dxdt to leave the box
+// [face_lo, face_hi]: per axis (face - x)/dxdt toward the faced boundary,
+// +inf for a zero component (branch BEFORE any division: 0/0 must never
+// reach the FPU). This mirrors dt_to_cell_exit_faces of
+// mcnux_interactions.hxx verbatim; it is duplicated here rather than
+// included because mcnux_geodesic.hxx must not depend on the interactions
+// layer (layering inversion) — a future-consolidation candidate for a
+// shared kinematics header.
+constexpr double dt_to_face_exit(const double x[3], const double dxdt[3],
+                                 const double face_lo[3],
+                                 const double face_hi[3]) noexcept {
+  double dt_min = std::numeric_limits<double>::infinity();
+  for (int d = 0; d < 3; ++d) {
+    double cand = std::numeric_limits<double>::infinity();
+    if (dxdt[d] > 0.0)
+      cand = (face_hi[d] - x[d]) / dxdt[d];
+    else if (dxdt[d] < 0.0)
+      cand = (face_lo[d] - x[d]) / dxdt[d];
+    if (cand < dt_min)
+      dt_min = cand;
+  }
+  return dt_min;
+}
+
+} // namespace detail
+
+// ---------------------------------------------------------------------------
+// Face-aware substepped push  [MCNX-GEO-03]/[MCNX-GEO-04]
+// ---------------------------------------------------------------------------
+// The production push entry point on the trilinear gather. The trilinear
+// interpolant is only C0 across the vertex planes x_d = prob_lo_d + i dx_d
+// (the NODE convention above): its derivative fields jump there, so an RK4
+// step integrated blindly across a face injects an O(dt * [f]) local error
+// at a pseudo-random phase and the accumulated p_t drift degrades to a
+// first-order random walk (measured on the schwarzschild-pt benchmark).
+// This driver therefore splits the push interval at face crossings so that
+// every RK4 (sub-)step integrates a SINGLE trilinear piece — one smooth
+// polynomial, one gather scheme per RHS evaluation ([MCNX-GEO-03]) — which
+// restores the integrator's design order on curved metrics.
+//
+// Per sub-step: (1) anchor i0 = floor((x - prob_lo)/dx) and one frozen RHS
+// at the sub-step start; a packet AT-or-below its cell's lower face moving
+// toward -d is re-anchored to the LOWER neighbor (the direction-aware entry
+// adjustment of mcnux_interactions.cxx — without it an exact face landing
+// with inward motion yields an infinite dt_exit = 0 loop). (2) The exit
+// bound is the frozen-velocity time to leave [face_lo, face_hi], inflated
+// by 1 + 4 eps so a crossing sub-step lands in (or bitwise on) the entered
+// cell instead of roundoff-short of the face (the boundary-crawl mechanism
+// documented at mcnux_interactions.cxx). (3) If the bound covers the
+// remainder, one anchored RK4 step finishes the interval — a step that
+// crosses no face floors to the same i0 and computes the same f as the
+// un-pinned gather, so no-crossing steps are arithmetic-identical to the
+// plain geodesic_step (the flat benchmark stays within roundoff: on
+// constant fields the anchored values are bitwise anchor-independent).
+// Otherwise the crossing time is located precisely before the sub-step is
+// taken, because the accuracy of the located crossing bounds the accuracy
+// of the whole push: the derivative fields JUMP by O(1) across the face,
+// so a sub-step that ends a time delta-t past the true crossing integrates
+// the wrong polynomial's dp_i/dt for that long — an O(delta-t) error with
+// a pseudo-random sign at every crossing. The frozen-velocity bound alone
+// locates the crossing only to O(dt^2) and the accumulated random walk
+// caps the push at observed order ~2 (measured on the schwarzschild-pt
+// legs; a one-shot Heun-averaged velocity still left order-breaking
+// realizations at ~1e-11). The production sequence is therefore
+// (a) Heun refinement — re-evaluate the RHS at the frozen-estimate
+// crossing state on the SAME anchored polynomial and redo the bound with
+// the averaged velocity (also fixing the crossing DIRECTION) — then
+// (b) Newton polish on the actual integrated trajectory: trial anchored
+// RK4 steps over the estimate, updating it by the landing's face residual
+// over the averaged velocity until the landing sits within a few ulps of
+// the face. The polished sub-step ends on the face to machine precision,
+// so the wrong-polynomial interval shrinks to the 4-eps inflation tier
+// (~1e-16 relative over a whole leg) and the push recovers the clean
+// smooth-RK4 O(dt^4) drift (measured: ~1e-11 at Delta t = M/16 on the
+// schwarzschild-pt base leg). Then one anchored RK4 sub-step of dt_exit,
+// and loop. RK4 stage positions may still overshoot the face by O(dt^2)
+// mid-step; the anchored gather extrapolates its polynomial smoothly
+// across it (a consistent one-scheme RK4 on the extended polynomial). A
+// safety cap bounds the sub-step count; on hitting it the whole remainder
+// is taken in one anchored step — residual time is NEVER dropped (dropped
+// time would silently corrupt the convergence observable).
+AMREX_GPU_HOST_DEVICE inline void
+geodesic_step_cellwise(const VertexMetricGather &gather, double x[3],
+                       double p[3], double dt) noexcept {
+  using std::floor;
+  constexpr int max_substeps = 64;
+  constexpr double exit_inflate =
+      1.0 + 4.0 * std::numeric_limits<double>::epsilon();
+
+  double dt_rem = dt;
+  for (int sub = 0; sub < max_substeps; ++sub) {
+    AnchoredVertexGather ag{gather, {0, 0, 0}};
+    double face_lo[3], face_hi[3];
+    for (int d = 0; d < 3; ++d) {
+      ag.i0[d] =
+          static_cast<int>(floor((x[d] - gather.prob_lo[d]) / gather.dx[d]));
+      face_lo[d] = gather.prob_lo[d] + ag.i0[d] * gather.dx[d];
+    }
+
+    // Frozen sub-step-start velocity (the episode-driver convention): one
+    // RHS at x on the floored anchor — identical to the un-pinned gather.
+    const MetricSnapshot m = ag(x[0], x[1], x[2]);
+    const GeodesicRhs rhs = geodesic_rhs(m, p);
+
+    // Direction-aware entry adjustment (mcnux_interactions.cxx precedent).
+    for (int d = 0; d < 3; ++d) {
+      if (x[d] <= face_lo[d] && rhs.dxdt[d] < 0.0) {
+        --ag.i0[d];
+        face_lo[d] -= gather.dx[d];
+      }
+      face_hi[d] = face_lo[d] + gather.dx[d];
+    }
+
+    const double dt0 = detail::dt_to_face_exit(x, rhs.dxdt, face_lo, face_hi);
+    if (dt0 * exit_inflate >= dt_rem || sub == max_substeps - 1) {
+      geodesic_step(ag, x, p, dt_rem);
+      return;
+    }
+
+    // (a) Heun refinement of the crossing time (see the header comment):
+    // one Euler predictor to the frozen-estimate crossing state, an RHS on
+    // the same anchored polynomial there, and the bound redone with the
+    // averaged velocity — tracking the crossing direction and target face
+    // for the Newton polish below.
+    double xc[3], pc[3];
+    for (int d = 0; d < 3; ++d) {
+      xc[d] = x[d] + dt0 * rhs.dxdt[d];
+      pc[d] = p[d] + dt0 * rhs.dpdt[d];
+    }
+    const GeodesicRhs rhc = geodesic_rhs(ag(xc[0], xc[1], xc[2]), pc);
+    double vavg[3];
+    for (int d = 0; d < 3; ++d)
+      vavg[d] = 0.5 * (rhs.dxdt[d] + rhc.dxdt[d]);
+
+    double dt_est = std::numeric_limits<double>::infinity();
+    int dstar = -1;
+    for (int d = 0; d < 3; ++d) {
+      double cand = std::numeric_limits<double>::infinity();
+      if (vavg[d] > 0.0)
+        cand = (face_hi[d] - x[d]) / vavg[d];
+      else if (vavg[d] < 0.0)
+        cand = (face_lo[d] - x[d]) / vavg[d];
+      if (cand < dt_est) {
+        dt_est = cand;
+        dstar = d;
+      }
+    }
+    // Anti-stall guard: the entry adjustment guarantees a strictly positive
+    // bound only for the FROZEN velocity; if an averaged component flips
+    // sign against an exactly-landed face the refined bound can degenerate
+    // to 0 (or lose every finite candidate) — fall back to the frozen
+    // bound and its direction rather than loop in place.
+    double slope;
+    if (dt_est > 0.0 && dstar >= 0) {
+      slope = vavg[dstar];
+    } else {
+      dt_est = dt0;
+      dstar = -1;
+      slope = 0.0;
+      for (int d = 0; d < 3; ++d) {
+        const double cand =
+            rhs.dxdt[d] > 0.0   ? (face_hi[d] - x[d]) / rhs.dxdt[d]
+            : rhs.dxdt[d] < 0.0 ? (face_lo[d] - x[d]) / rhs.dxdt[d]
+                                : std::numeric_limits<double>::infinity();
+        if (cand == dt0 && dstar < 0) {
+          dstar = d;
+          slope = rhs.dxdt[d];
+        }
+      }
+    }
+    if (dt_est * exit_inflate >= dt_rem) {
+      geodesic_step(ag, x, p, dt_rem);
+      return;
+    }
+
+    // (b) Newton polish on the actual integrated trajectory: trial
+    // anchored RK4 steps, residual = landing minus target face, slope the
+    // averaged velocity component (the true trajectory slope to O(dt) —
+    // ample for a few near-quadratic corrections). Converged when the
+    // landing is within a few ulps of the face; a correction leaving
+    // (0, dt_rem) stops the polish with the last in-range estimate.
+    {
+      const double face_target = slope > 0.0 ? face_hi[dstar] : face_lo[dstar];
+      const double res_tol = 4.0 * std::numeric_limits<double>::epsilon() *
+                             (std::fabs(face_target) + gather.dx[dstar]);
+      for (int nit = 0; nit < 4; ++nit) {
+        double xt[3] = {x[0], x[1], x[2]};
+        double pt[3] = {p[0], p[1], p[2]};
+        geodesic_step(ag, xt, pt, dt_est);
+        const double resid = xt[dstar] - face_target;
+        if (std::fabs(resid) <= res_tol)
+          break;
+        const double dt_new = dt_est - resid / slope;
+        if (!(dt_new > 0.0) || dt_new >= dt_rem)
+          break;
+        dt_est = dt_new;
+      }
+    }
+
+    const double dt_exit = dt_est * exit_inflate;
+    if (dt_exit >= dt_rem) {
+      geodesic_step(ag, x, p, dt_rem);
+      return;
+    }
+    geodesic_step(ag, x, p, dt_exit);
+    dt_rem -= dt_exit;
+  }
+}
+
+static_assert(std::is_trivially_copyable_v<VertexMetricGather> &&
+                  std::is_trivially_copyable_v<AnchoredVertexGather>,
+              "[MCNX-GPU-02] the gather functors are captured by value into "
               "packet kernels and must be trivially copyable");
 static_assert(std::is_trivially_copyable_v<MetricSnapshot> &&
                   std::is_trivially_copyable_v<GeodesicRhs>,

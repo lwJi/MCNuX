@@ -50,11 +50,12 @@ BOOLEAN test_ledger_closure "Audit the per-step five-channel conservation-ledger
 } "no"
 
 # Synthetic packet fixture switch of specs/geodesic-propagation.md
-# (Verification: flat-spacetime exactness; the `minkowski-freestream`
-# benchmark, and T16's Schwarzschild legs): MCNuX::test_synthetic_packets =
-# yes seeds a fixed, deterministic set of packets at initial time
-# (MCNuX_SeedSyntheticPackets), schedules the geodesic push over them in
-# every transport step, and mirrors their state into the
+# (Verification: flat-spacetime exactness and the Schwarzschild p_t-drift
+# study; the `minkowski-freestream` and `schwarzschild-pt` benchmarks):
+# MCNuX::test_synthetic_packets = yes seeds a fixed, deterministic set of
+# packets at initial time (MCNuX_SeedSyntheticPackets; which set is chosen
+# by synthetic_packet_fixture below), schedules the geodesic push over them
+# in every transport step, and mirrors their state into the
 # MCNuX::mcnux_packet_diag table for golden output. Off by default — the
 # fixture is verification scaffolding, not physics — and STEERABLE=NEVER,
 # because the table's storage and the routines' scheduling are decided from
@@ -63,6 +64,22 @@ BOOLEAN test_ledger_closure "Audit the per-step five-channel conservation-ledger
 BOOLEAN test_synthetic_packets "Seed the deterministic synthetic packet fixture and push it along geodesics each transport step" STEERABLE=NEVER
 {
 } "no"
+
+# Which deterministic seed set MCNuX_SeedSyntheticPackets writes (both are
+# 8-row function-local tables in mcnux_geodesic.cxx, sized to the
+# MCNuX::mcnux_packet_diag table): "minkowski" is the flat-spacetime set of
+# the `minkowski-freestream` benchmark (|x^i| <= 0.25, six axis directions
+# plus two oblique); "schwarzschild" is the curved-background set of the
+# `schwarzschild-pt` drift/convergence legs (isotropic r in [6, 10] M,
+# dominant outgoing-radial momenta). Ignored unless test_synthetic_packets =
+# yes. STEERABLE=NEVER: the seed set is written once at initial time and
+# golden data depends on it.
+
+KEYWORD synthetic_packet_fixture "Deterministic seed set of the synthetic packet fixture" STEERABLE=NEVER
+{
+  "minkowski"     :: "eight flat-spacetime packets inside |x^i| <= 0.25 (`minkowski-freestream`)"
+  "schwarzschild" :: "eight outgoing packets at isotropic r in [6, 10] M (`schwarzschild-pt` legs)"
+} "minkowski"
 
 # Fluid-gather diagnostic switch of specs/neutrino-matter-interactions.md
 # ([MCNX-INT-05] and the cell-centered u^mu of its inputs table; the
