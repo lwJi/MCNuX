@@ -407,14 +407,86 @@ extern "C" void MCNuX_Emission(CCTK_ARGUMENTS) {
 }
 
 // ---------------------------------------------------------------------------
-// Emission diagnostic  (MCNuX::mcnux_packet_diag)
+// Emission diagnostics  (MCNuX::mcnux_packet_diag, MCNuX::mcnux_emission_diag)
 // ---------------------------------------------------------------------------
-// Mirrors the created population into the per-packet golden table (the
+// Mirrors the created population into the per-packet golden tables (the
 // shared fill_packet_diag of mcnux_gather.hxx / mcnux_geodesic.cxx: row =
-// packet id - 1, hard CCTK_VERROR above the declared SIZE — the emit-smoke
-// benchmark tunes eta_scale so the total emitted count stays within it).
-// The AT initial leg fills the (empty-population) all-zero table so
-// iteration-0 output is defined.
+// packet id - 1, hard CCTK_VERROR above the declared SIZE — the emit-smoke /
+// emission-fixedseed benchmarks tune eta_scale so the total emitted count
+// stays within it). The AT initial leg fills the (empty-population) all-zero
+// tables so iteration-0 output is defined.
+//
+// The discrete identity half (id, weight, species, event counter — the
+// "exact packet set (ids, states)" observable of the `emission-fixedseed`
+// row, specs/verification-suite-design.md:243) goes into the sibling group
+// mcnux_emission_diag via the local staging kernel below, modeled on
+// fill_packet_diag: device buffer keyed by unpack_id - 1, zero-fill first,
+// hard CCTK_VERROR past the declared SIZE, host copy-out. Single-rank
+// assumption as in fill_packet_diag (every MCNuX test runs NPROCS 1).
+
+namespace {
+
+// Number of doubles per packet in the emission-identity staging buffer:
+// id, weight, species, event counter.
+constexpr int emdiag_width = 4;
+
+struct EmissionDiagColumns {
+  CCTK_REAL *id, *w, *species, *ec;
+};
+
+inline int emission_diag_size() {
+  return diag_array_size("MCNuX::mcnux_emission_diag");
+}
+
+void fill_emission_diag(const EmissionDiagColumns &cols, const int nrows) {
+  for (int r = 0; r < nrows; ++r) {
+    cols.id[r] = 0.0;
+    cols.w[r] = 0.0;
+    cols.species[r] = 0.0;
+    cols.ec[r] = 0.0;
+  }
+
+  for_each_packet_tile_raw([&](const CarpetX::GHExt::PatchData &,
+                               const CarpetX::GHExt::PatchData::LevelData &,
+                               PacketContainer &, const PacketIter &pti) {
+    const long np = pti.numParticles();
+    if (np == 0)
+      return;
+    const auto ptd = pti.GetParticleTile().getParticleTileData();
+
+    amrex::Gpu::DeviceVector<double> staging(std::size_t(np) * emdiag_width);
+    double *const out = staging.data();
+    amrex::ParallelFor(np, [=] AMREX_GPU_DEVICE(long ip) noexcept {
+      double *const row = out + ip * emdiag_width;
+      row[0] = double(amrex::particle_impl::unpack_id(ptd.m_idcpu[ip]));
+      row[1] = ptd.rdata(PIdx::w)[ip];
+      row[2] = double(ptd.idata(IntIdx::species)[ip]);
+      row[3] = double(ptd.idata(IntIdx::event_counter)[ip]);
+    });
+    amrex::Gpu::streamSynchronize();
+
+    std::vector<double> host(std::size_t(np) * emdiag_width);
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost, staging.begin(), staging.end(),
+                     host.begin());
+
+    for (long ip = 0; ip < np; ++ip) {
+      const double *const row = host.data() + ip * emdiag_width;
+      const long id = long(row[0]);
+      if (id < 1 || id > nrows)
+        CCTK_VERROR("MCNuX packet id %ld is outside the emission diagnostic "
+                    "table (MCNuX::mcnux_emission_diag has SIZE=%d rows)",
+                    id, nrows);
+      const int r = int(id - 1);
+      cols.id[r] = row[0];
+      cols.w[r] = row[1];
+      cols.species[r] = row[2];
+      cols.ec[r] = row[3];
+    }
+  });
+}
+
+} // namespace
+
 extern "C" void MCNuX_EmissionDiag(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTS_MCNuX_EmissionDiag;
   DECLARE_CCTK_PARAMETERS;
@@ -422,6 +494,7 @@ extern "C" void MCNuX_EmissionDiag(CCTK_ARGUMENTS) {
   fill_packet_diag(metric_groups(), {pk_x, pk_y, pk_z, pk_px, pk_py, pk_pz,
                                      pk_pt},
                    packet_diag_size());
+  fill_emission_diag({em_id, em_w, em_species, em_ec}, emission_diag_size());
 }
 
 } // namespace MCNuX

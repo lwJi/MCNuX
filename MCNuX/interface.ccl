@@ -72,6 +72,28 @@ CCTK_REAL mcnux_packet_diag TYPE=ARRAY DIM=1 SIZE=8 DISTRIB=CONSTANT TAGS='check
   pk_x pk_y pk_z pk_px pk_py pk_pz pk_pt
 } "MCNuX synthetic packet diagnostics (position, lower momentum, covariant energy per fixture packet)"
 
+# Per-packet emission-identity diagnostic table
+# (specs/packet-representation-and-sampling.md [MCNX-PKT-01/02/03/05]; the
+# `emission-fixedseed` benchmark of specs/verification-suite-design.md:243,
+# "exact packet set (ids, states) golden"). Sibling of mcnux_packet_diag:
+# the discrete half of the created packet state — AMReX id, weight
+# N = E_p/nu, species index (0 nu_e, 1 nu_e_bar, 2 nu_x), and the RNG event
+# counter e — all integers or exact binary fractions stored exactly in
+# binary64. Same row keying as mcnux_packet_diag: row = packet id - 1
+# (independent of tile and iteration order), zero rows for unissued ids, and
+# the same SIZE-cap discipline: a packet id above SIZE is a hard CCTK_VERROR
+# (the id budget of the benchmark tuning, never a silent truncation). SIZE
+# is cross-checked at runtime against the fill routine's bound. A SEPARATE
+# group (not extra mcnux_packet_diag columns) so every existing benchmark's
+# per-group golden TSVs stay byte-stable. Storage is parameter-gated
+# (schedule.ccl); not checkpointed: recomputed from the population every
+# fill.
+
+CCTK_REAL mcnux_emission_diag TYPE=ARRAY DIM=1 SIZE=8 DISTRIB=CONSTANT TAGS='checkpoint="no"'
+{
+  em_id em_w em_species em_ec
+} "MCNuX per-packet emission identity diagnostics (AMReX id, weight, species index, event counter per created packet)"
+
 # Per-packet fluid-gather diagnostic table
 # (specs/neutrino-matter-interactions.md [MCNX-INT-05] and its inputs table:
 # the cell-centered (rho, T[MeV], Ye) fluid state of the packet's containing

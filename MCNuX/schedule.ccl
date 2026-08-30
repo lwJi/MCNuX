@@ -344,7 +344,7 @@ if (enable_emission)
 
 if (enable_emission && test_emission)
 {
-  STORAGE: mcnux_packet_diag
+  STORAGE: mcnux_packet_diag mcnux_emission_diag
 
   SCHEDULE MCNuX_EmissionDiag AT initial AFTER ODESolvers_Initial
   {
@@ -354,7 +354,8 @@ if (enable_emission && test_emission)
     READS: ADMBaseX::lapse(everywhere)
     READS: ADMBaseX::shift(everywhere)
     WRITES: MCNuX::mcnux_packet_diag(everywhere)
-  } "Fill the per-packet diagnostic table (initial data: empty population)"
+    WRITES: MCNuX::mcnux_emission_diag(everywhere)
+  } "Fill the per-packet diagnostic tables (initial data: empty population)"
 
   SCHEDULE MCNuX_EmissionDiag IN MCNuX_AddToSourceTerms AFTER MCNuX_Emission
   {
@@ -365,7 +366,9 @@ if (enable_emission && test_emission)
     READS: ADMBaseX::shift(everywhere)
     READS: MCNuX::mcnux_packet_diag(everywhere)
     WRITES: MCNuX::mcnux_packet_diag(everywhere)
-  } "Mirror the emitted packet population into the diagnostic table"
+    READS: MCNuX::mcnux_emission_diag(everywhere)
+    WRITES: MCNuX::mcnux_emission_diag(everywhere)
+  } "Mirror the emitted packet population into the diagnostic tables"
 }
 
 # The synthetic-event contributor (verification scaffolding, parameter-gated):
