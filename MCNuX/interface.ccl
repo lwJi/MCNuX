@@ -48,7 +48,7 @@ CCTK_INT mcnux_transport_diag TYPE=SCALAR
 # Not checkpointed: the battery is recomputed from nothing but code, so it is
 # not part of any evolved state.
 
-CCTK_REAL mcnux_selftest TYPE=ARRAY DIM=1 SIZE=150 DISTRIB=CONSTANT TAGS='checkpoint="no"'
+CCTK_REAL mcnux_selftest TYPE=ARRAY DIM=1 SIZE=156 DISTRIB=CONSTANT TAGS='checkpoint="no"'
 {
   selftest_error
   selftest_pass
@@ -128,6 +128,25 @@ CCTK_REAL mcnux_ledger_diag TYPE=ARRAY DIM=1 SIZE=5 DISTRIB=CONSTANT TAGS='check
 {
   lg_grid_total lg_event_net lg_gross lg_residual lg_pass
 } "MCNuX conservation-ledger closure diagnostics (grid total, event net, gross activity, residual, pass per channel P^t, P_x, P_y, P_z, L)"
+
+# Statistical-check verdict table of specs/verification-suite-design.md
+# [MCNX-VER-07] (the binding per-check output shape: estimate, expected value,
+# standard error sigma, and z = (estimate - expected)/sigma) — the output of
+# the stats-tier writers, first consumer MCNuX_StatsEmission (the
+# `stats-emission` benchmark, [MCNX-PKT-06]). One row per check; the
+# stats-emission row layout (4 rows per species in species_index order:
+# count, energy, cos(theta) mean, phi mean; then the two RNG uniformity rows)
+# is owned by, and documented in, src/mcnux_emission.cxx, which cross-checks
+# SIZE against its own row count at runtime. Acceptance |z| <= 4 is judged
+# once at golden capture; thereafter the archived z values are golden numbers
+# diffed at 1e-12. Same shape idiom as mcnux_ledger_diag; storage is
+# parameter-gated (schedule.ccl); not checkpointed: the table is recomputed
+# from the per-step accumulator every fill.
+
+CCTK_REAL mcnux_stats_diag TYPE=ARRAY DIM=1 SIZE=14 DISTRIB=CONSTANT TAGS='checkpoint="no"'
+{
+  stats_estimate stats_expected stats_sigma stats_z
+} "MCNuX statistical-check verdicts (estimate, expected, standard error, standardized deviation z per check)"
 
 # MCNuX-owned source-term grid variables of
 # specs/hydro-coupling-source-terms.md [MCNX-HYD-01] — the published coupling

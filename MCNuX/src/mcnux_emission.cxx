@@ -40,6 +40,8 @@
 #include "mcnux_fluid.hxx"
 #include "mcnux_particles.hxx"
 #include "mcnux_srcterms.hxx"
+#include "mcnux_stats.hxx"
+#include "mcnux_stats_emission.hxx"
 #include "mcnux_table_range.hxx"
 #include "mcnux_tetrad.hxx"
 #include "mcnux_units.hxx"
@@ -85,6 +87,29 @@ struct BinTable {
 
 // The per-step event-side audit accumulator behind emission_step_audit().
 LedgerAudit g_emission_audit{};
+
+// ---------------------------------------------------------------------------
+// stats-emission accumulator ([MCNX-PKT-06], [MCNX-VER-07])
+// ---------------------------------------------------------------------------
+// Step-scoped species-keyed reduction of the emission pass, gated on
+// test_stats_emission (the production kernels see only a null-pointer check
+// when it is off). Per species s (base = stats_stride * s):
+//   +0  Sum of the PRE-floor real-valued N_p over (cell, bin)   — the
+//       expected count of the [MCNX-PKT-02] floor + Bernoulli law (using
+//       the post-Bernoulli integer here would bias the count z; brief risk
+//       (b)), accumulated in the count pass;
+//   +1  Sum p(1 - p), p = frac(N_p)                             — the count
+//       variance (independent per-cell Bernoulli remainders), count pass;
+//   +2  realized created-packet count                           — fill pass;
+//   +3  Sum cos(theta)                                          — fill pass
+//       (cos(theta)/phi are local at draw time, never stored on the packet,
+//       so they MUST be accumulated here);
+//   +4  Sum phi                                                 — fill pass.
+// Folded to g_stats_accum after the walk (the audit_dev idiom); consumed by
+// MCNuX_StatsEmission below.
+constexpr int stats_stride = 5;
+constexpr int stats_num_slots = NUM_SPECIES * stats_stride;
+double g_stats_accum[stats_num_slots] = {};
 
 } // namespace
 
@@ -137,6 +162,15 @@ extern "C" void MCNuX_Emission(CCTK_ARGUMENTS) {
   emission_step_audit() = LedgerAudit{};
   amrex::Gpu::DeviceVector<double> audit_dev(10, 0.0);
   double *const audit_ptr = audit_dev.data();
+
+  // stats-emission accumulator ([MCNX-VER-07]): step-reset always (stale
+  // values must never leak into MCNuX_StatsEmission), device slots only when
+  // the gate is on.
+  for (int i = 0; i < stats_num_slots; ++i)
+    g_stats_accum[i] = 0.0;
+  amrex::Gpu::DeviceVector<double> stats_dev(
+      test_stats_emission ? stats_num_slots : 0, 0.0);
+  double *const stats_ptr = test_stats_emission ? stats_dev.data() : nullptr;
 
   long total_created = 0;
 
@@ -251,6 +285,18 @@ extern "C" void MCNuX_Emission(CCTK_ARGUMENTS) {
               packet_count(s, sqrt_neg_g, dV_cm3, dt_s, eta_b, E_p_MeV);
           const std::uint64_t K = cell_key(patch, level, i, j, k, di0, dj0, dk0);
           counts_ptr[m] = emission_count(N_p, cell_count_uniform(S, K, n, b, s));
+
+          // stats-emission ([MCNX-VER-07]): expected count = the PRE-floor
+          // real-valued N_p; count variance = p(1 - p) of the Bernoulli
+          // remainder, p computed with emission_count's own truncation.
+          if (stats_ptr != nullptr) {
+            const double p =
+                N_p - static_cast<double>(static_cast<std::int64_t>(N_p));
+            amrex::Gpu::Atomic::AddNoRet(&stats_ptr[stats_stride * sidx + 0],
+                                         N_p);
+            amrex::Gpu::Atomic::AddNoRet(&stats_ptr[stats_stride * sidx + 1],
+                                         p * (1.0 - p));
+          }
         });
 
         // -------------------------------------------------------------
@@ -338,6 +384,21 @@ extern "C" void MCNuX_Emission(CCTK_ARGUMENTS) {
             // Direction/momentum chain of [MCNX-PKT-04], metric sampled at
             // the packet's creation position.
             const UnitVector3 nhat = fluid_frame_direction(cu.u1, cu.u2);
+
+            // stats-emission ([MCNX-VER-07]): realized count and the angular
+            // first moments, accumulated HERE because cos(theta)/phi exist
+            // only at draw time. nhat.z IS cos(theta) = 2 u1 - 1 bitwise
+            // (fluid_frame_direction returns it as the z component); phi is
+            // recomputed by the identical 2 pi u2 expression of
+            // fluid_frame_direction (it is never returned).
+            if (stats_ptr != nullptr) {
+              amrex::Gpu::Atomic::AddNoRet(&stats_ptr[stats_stride * sidx + 2],
+                                           1.0);
+              amrex::Gpu::Atomic::AddNoRet(&stats_ptr[stats_stride * sidx + 3],
+                                           nhat.z);
+              amrex::Gpu::Atomic::AddNoRet(&stats_ptr[stats_stride * sidx + 4],
+                                           2.0 * detail::pi * cu.u2);
+            }
             const MetricSnapshot mm = mgather(x, y, z);
             double u4[4];
             valencia_four_velocity(mm.alpha, mm.beta, mm.g, fs.vel, u4);
@@ -401,6 +462,16 @@ extern "C" void MCNuX_Emission(CCTK_ARGUMENTS) {
                           audit_host[3], audit_host[4]};
   audit.gross = LedgerDelta{audit_host[5], audit_host[6], audit_host[7],
                             audit_host[8], audit_host[9]};
+
+  // Fold the device stats accumulator into the step accumulator (same
+  // sync-then-copy discipline as the audit fold above).
+  if (test_stats_emission) {
+    std::vector<double> stats_host(stats_num_slots, 0.0);
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost, stats_dev.begin(),
+                     stats_dev.end(), stats_host.begin());
+    for (int i = 0; i < stats_num_slots; ++i)
+      g_stats_accum[i] = stats_host[i];
+  }
 
   CCTK_VINFO("MCNuX emission step %u: created %ld packets", unsigned(n),
              total_created);
@@ -495,6 +566,136 @@ extern "C" void MCNuX_EmissionDiag(CCTK_ARGUMENTS) {
                                      pk_pt},
                    packet_diag_size());
   fill_emission_diag({em_id, em_w, em_species, em_ec}, emission_diag_size());
+}
+
+// ---------------------------------------------------------------------------
+// Statistical-reduction writer  (MCNuX::mcnux_stats_diag)
+// ---------------------------------------------------------------------------
+// The first stats-tier writer ([MCNX-PKT-06], [MCNX-VER-07]; the
+// `stats-emission` benchmark of specs/verification-suite-design.md:255-279):
+// reduce the emission step into per-check (estimate, expected, sigma, z)
+// rows through the frozen MCNuX::zscore() of mcnux_stats.hxx (called
+// verbatim, never reimplemented) and mirror them into the
+// MCNuX::mcnux_stats_diag table for golden output. Acceptance |z| <= 4 is
+// judged once at golden capture; thereafter the archived z values are
+// themselves golden numbers diffed at 1e-12.
+//
+// Row layout (SIZE=14), species blocks in the binding species_index order
+// (0 nu_e, 1 nu_e_bar, 2 nu_x; mcnux_units.hxx):
+//   4s + 0  realized created-packet count vs Sum N_p (pre-floor exact
+//           counts), sigma = sqrt(Sum p(1 - p)) — the [MCNX-PKT-02] floor +
+//           Bernoulli construction;
+//   4s + 1  total emitted fluid-frame energy: estimate = E_p * realized
+//           count (each packet carries w * nu = E_p exactly,
+//           packet_weight of mcnux_emission.hxx), expected = E_p * Sum N_p
+//           (the count-law identity E_p N_p = g_s sqrt(-g) dV dt eta_b —
+//           the nu_x g = 4 leg of [MCNX-CNV-06] is carried through
+//           degeneracy() inside the accumulated N_p), sigma = E_p *
+//           sigma_count — so the energy and count z rows are exactly
+//           proportional by construction;
+//   4s + 2  cos(theta) sample mean vs 0, sigma = sqrt(1/(3 n_s)) with n_s
+//           the realized count (documented sample-size choice);
+//   4s + 3  phi sample mean vs pi, sigma = pi sqrt(1/(3 n_s));
+//   12      RNG uniformity sample mean vs 1/2, sigma = 1/sqrt(12 N)
+//           (spec-stated, rng-and-statistical-acceptance.md:118);
+//   13      RNG uniformity second moment vs 1/3, sigma = sqrt(4/(45 N)).
+// Sigma formulas are benchmark-owned (mcnux_stats_emission.hxx), never
+// added to mcnux_stats.hxx (its binding non-goal).
+//
+// The RNG rows sweep the pure u(S, q, e, k) on the host over the documented
+// tuple sweep q = 1..N at fixed e = 0, k = 0, with the pinned
+// S = stats_seed_primary = 1296518744 and N = stats_default_num_packets =
+// 2^20 — independent of the run's own rng_seed and packet draws, so they
+// are computed identically on the AT initial leg. The packet rows are
+// zero-filled at initial (no emission has run; deterministic iteration-0
+// output) and computed from g_stats_accum in-step, where a species with
+// zero realized packets is a hard error (its angular sigmas would be
+// meaningless at sigma = 0; the benchmark is tuned so all three species
+// emit).
+
+namespace {
+
+inline int stats_diag_size() {
+  return diag_array_size("MCNuX::mcnux_stats_diag");
+}
+
+} // namespace
+
+extern "C" void MCNuX_StatsEmission(CCTK_ARGUMENTS) {
+  DECLARE_CCTK_ARGUMENTS_MCNuX_StatsEmission;
+  DECLARE_CCTK_PARAMETERS;
+
+  constexpr int expected_rows = 14;
+  const int nrows = stats_diag_size();
+  if (nrows != expected_rows)
+    CCTK_VERROR("MCNuX::mcnux_stats_diag has SIZE=%d but MCNuX_StatsEmission "
+                "writes %d check rows; the two must agree "
+                "(MCNuX/interface.ccl)",
+                nrows, expected_rows);
+
+  for (int r = 0; r < nrows; ++r) {
+    stats_estimate[r] = 0.0;
+    stats_expected[r] = 0.0;
+    stats_sigma[r] = 0.0;
+    stats_z[r] = 0.0;
+  }
+
+  const auto put = [&](int r, const ZScore &zs) {
+    stats_estimate[r] = zs.estimate;
+    stats_expected[r] = zs.expected;
+    stats_sigma[r] = zs.sigma;
+    stats_z[r] = zs.z;
+    CCTK_VINFO("MCNuX stats-emission row %2d: estimate = %.17g, "
+               "expected = %.17g, sigma = %.17g, z = %.17g  %s",
+               r, zs.estimate, zs.expected, zs.sigma, zs.z,
+               zs.pass ? "PASS" : "FAIL");
+  };
+
+  // Packet rows 0..11: in-step only (the AT initial leg keeps the
+  // deterministic zero fill above — no emission has run).
+  if (cctk_iteration > 0) {
+    const double E_p_MeV = E_p;
+    for (int s = 0; s < NUM_SPECIES; ++s) {
+      const double exp_count = g_stats_accum[stats_stride * s + 0];
+      const double var_count = g_stats_accum[stats_stride * s + 1];
+      const double n_s = g_stats_accum[stats_stride * s + 2];
+      const double sum_cos = g_stats_accum[stats_stride * s + 3];
+      const double sum_phi = g_stats_accum[stats_stride * s + 4];
+
+      if (n_s <= 0.0)
+        CCTK_VERROR(
+            "MCNuX stats-emission: species %d realized zero packets this "
+            "step; its angular check rows are meaningless at sigma = 0 "
+            "([MCNX-VER-07]). Tune the benchmark (E_p / eta_scale) so every "
+            "species emits.",
+            s);
+
+      const double sigma_count = sigma_bernoulli_sum(var_count);
+      put(4 * s + 0, zscore(n_s, exp_count, sigma_count));
+      put(4 * s + 1, zscore(E_p_MeV * n_s, E_p_MeV * exp_count,
+                            E_p_MeV * sigma_count));
+      put(4 * s + 2, zscore(sum_cos / n_s, 0.0, sigma_isotropy_costheta(n_s)));
+      put(4 * s + 3,
+          zscore(sum_phi / n_s, detail::pi, sigma_isotropy_phi(n_s)));
+    }
+  }
+
+  // RNG uniformity-at-the-pinned-bar rows 12..13
+  // (rng-and-statistical-acceptance.md:118): host sweep q = 1..N at e = 0,
+  // k = 0, pinned primary seed, N = 2^20.
+  {
+    const std::uint64_t S = stats_seed_primary;
+    const std::int64_t N = stats_default_num_packets;
+    double sum = 0.0, sum2 = 0.0;
+    for (std::int64_t qi = 1; qi <= N; ++qi) {
+      const double r = u(S, static_cast<std::uint64_t>(qi), 0u, 0u);
+      sum += r;
+      sum2 += r * r;
+    }
+    const double Nd = static_cast<double>(N);
+    put(12, zscore(sum / Nd, 0.5, sigma_uniform_mean(Nd)));
+    put(13, zscore(sum2 / Nd, 1.0 / 3.0, sigma_uniform_second_moment(Nd)));
+  }
 }
 
 } // namespace MCNuX

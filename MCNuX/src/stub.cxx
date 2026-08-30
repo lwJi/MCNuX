@@ -11,6 +11,7 @@
 #include "mcnux_selftest.hxx"
 #include "mcnux_srcterms.hxx"
 #include "mcnux_stats.hxx"
+#include "mcnux_stats_emission.hxx"
 #include "mcnux_table_coeffs.hxx"
 #include "mcnux_table_range.hxx"
 #include "mcnux_tetrad.hxx"

@@ -217,6 +217,23 @@ BOOLEAN test_emission "Mirror the emitted packet population into the packet diag
 {
 } "no"
 
+# Statistical-reduction writer switch of specs/verification-suite-design.md
+# [MCNX-VER-07] and specs/packet-representation-and-sampling.md [MCNX-PKT-06]
+# (the `stats-emission` benchmark): MCNuX::test_stats_emission = yes turns on
+# the step-scoped emission statistics accumulator inside MCNuX_Emission and
+# schedules MCNuX_StatsEmission after it, reducing the emission step into
+# per-check (estimate, expected, sigma, z) rows — per-species realized count,
+# emitted energy (incl. the nu_x g = 4 leg), cos(theta)/phi first moments,
+# plus the two RNG uniformity-at-the-pinned-bar rows — mirrored into the
+# MCNuX::mcnux_stats_diag table for golden output. Off by default —
+# verification scaffolding — and STEERABLE=NEVER, because the table's storage
+# and the routine's scheduling are decided from it at startup. MCNuX_ParamCheck
+# forbids it without enable_emission (there is no emission step to reduce).
+
+BOOLEAN test_stats_emission "Reduce the emission step into (estimate, expected, sigma, z) statistical check rows" STEERABLE=NEVER
+{
+} "no"
+
 # The run's base RNG seed S of specs/rng-and-reproducibility.md: every
 # emission draw is an evaluation of the pure u(S, q, e, k) of mcnux_rng.hxx
 # at this S. The default is the pinned primary statistics seed

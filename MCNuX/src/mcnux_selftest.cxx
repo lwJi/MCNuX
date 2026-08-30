@@ -276,6 +276,29 @@
 //                                                 pair through the redraw vs
 //                                                 direct u(S, q, e, k),
 //                                                 bitwise)
+// 150       statsem.sigma.bernoulli_exact         [MCNX-VER-07] (Bernoulli-
+//                                                 sum count sigma
+//                                                 sqrt(Sum p(1-p)), exact
+//                                                 perfect-square fixtures)
+// 151       statsem.sigma.bernoulli_zero          [MCNX-VER-07] (sigma = 0
+//                                                 at the deterministic-count
+//                                                 point Sum p(1-p) = 0,
+//                                                 exact)
+// 152       statsem.sigma.uniform_mean            [MCNX-RNG-07] (uniformity
+//                                                 mean sigma 1/sqrt(12 N):
+//                                                 12 N sigma^2 = 1 machine
+//                                                 at the pinned N = 2^20)
+// 153       statsem.sigma.uniform_m2              [MCNX-VER-07] (second-
+//                                                 moment sigma sqrt(4/(45N)):
+//                                                 45 N sigma^2/4 = 1 machine
+//                                                 at the pinned N = 2^20)
+// 154       statsem.sigma.costheta                [MCNX-VER-07] (isotropy
+//                                                 cos theta sample-mean
+//                                                 sigma sqrt(1/(3n)):
+//                                                 3 n sigma^2 = 1 machine)
+// 155       statsem.sigma.phi_pi_proportional     [MCNX-VER-07] (phi sigma
+//                                                 == pi * cos theta sigma,
+//                                                 bitwise product identity)
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -411,6 +434,14 @@ void run_battery(Battery &b) {
   // curved/boosted tetrad fixture and the flat-static limit, plus the
   // [MCNX-INT-06] k = 2, 3 draw-composition pin.
   append_scatter_rows(b);
+
+  // Rows 150..155 — the benchmark-owned standard-error formulas of the
+  // stats-emission statistical benchmark ([MCNX-PKT-06]/[MCNX-VER-07];
+  // uniformity sigmas of rng-and-statistical-acceptance.md:118) through
+  // mcnux_stats_emission.hxx: Bernoulli-sum count sigma, RNG uniformity
+  // mean/second-moment sigmas at the pinned N = 2^20, and the isotropy
+  // cos(theta)/phi sample-mean sigmas.
+  append_stats_emission_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.

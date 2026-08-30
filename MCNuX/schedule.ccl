@@ -371,6 +371,40 @@ if (enable_emission && test_emission)
   } "Mirror the emitted packet population into the diagnostic tables"
 }
 
+# Statistical-reduction writer of specs/verification-suite-design.md
+# [MCNX-VER-07] / specs/packet-representation-and-sampling.md [MCNX-PKT-06]
+# (parameter-gated by MCNuX::test_stats_emission; the `stats-emission`
+# benchmark): reduce the emission step's accumulator into per-check
+# (estimate, expected, sigma, z) rows in the MCNuX::mcnux_stats_diag table.
+# The AT initial leg defines iteration-0 output (packet rows zero-filled —
+# no emission has run — RNG uniformity rows computed); the in-step leg runs
+# in the same-group AFTER-Emission slot (the MCNuX_EmissionDiag precedent),
+# so the step's accumulator is complete when read. Modes mirror the
+# EmissionDiag pair ([MCNX-CTX-03]); the routine reads no grid functions —
+# the self pair on the verdict table is its complete grid-variable footprint
+# ([MCNX-CTX-04]; the accumulator is TU-local state in mcnux_emission.cxx,
+# not a grid variable).
+
+if (test_stats_emission)
+{
+  STORAGE: mcnux_stats_diag
+
+  SCHEDULE MCNuX_StatsEmission AT initial AFTER ODESolvers_Initial
+  {
+    LANG: C
+    OPTIONS: global
+    WRITES: MCNuX::mcnux_stats_diag(everywhere)
+  } "Fill the statistical-check verdict table (initial data: zero packet rows, RNG uniformity rows)"
+
+  SCHEDULE MCNuX_StatsEmission IN MCNuX_AddToSourceTerms AFTER MCNuX_Emission
+  {
+    LANG: C
+    OPTIONS: level
+    READS: MCNuX::mcnux_stats_diag(everywhere)
+    WRITES: MCNuX::mcnux_stats_diag(everywhere)
+  } "Reduce the emission step into (estimate, expected, sigma, z) statistical check rows"
+}
+
 # The synthetic-event contributor (verification scaffolding, parameter-gated):
 # proves the deposition/ledger path of [MCNX-HYD-02] before any real event
 # producer exists. The complete self-accumulating READS:/WRITES: pair is the

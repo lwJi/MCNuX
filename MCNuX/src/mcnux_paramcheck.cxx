@@ -84,6 +84,20 @@ extern "C" void MCNuX_ParamCheck(CCTK_ARGUMENTS) {
         "Disable one of the two contributors, or turn the closure audit "
         "off.");
 
+  // Statistical-reduction writer guard ([MCNX-VER-07]): the stats-emission
+  // rows reduce the emission step, so without the emission loop there is
+  // nothing to reduce and every packet row would abort on its zero-count
+  // guard at the first transport step.
+  if (test_stats_emission && !enable_emission)
+    CCTK_VERROR(
+        "MCNuX::test_stats_emission = yes requires MCNuX::enable_emission = "
+        "yes: the statistical-reduction writer MCNuX_StatsEmission reduces "
+        "the production emission step ([MCNX-PKT-06]/[MCNX-VER-07], the "
+        "`stats-emission` benchmark of "
+        "specs/verification-suite-design.md:255-279); without the emission "
+        "loop there is no step to reduce. Enable emission, or turn the "
+        "statistical writer off.");
+
   if (enable_emission && test_synthetic_packets)
     CCTK_VERROR(
         "MCNuX::enable_emission = yes is incompatible with "

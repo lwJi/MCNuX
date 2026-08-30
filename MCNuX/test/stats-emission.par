@@ -1,0 +1,148 @@
+# stats-emission — the first [MCNX-VER-07] statistical benchmark of
+# specs/verification-suite-design.md:255-279: equilibration box, analytic
+# mode, ONE emission-only step, reduced by the statistical-reduction writer
+# MCNuX_StatsEmission into per-check (estimate, expected, sigma, z) rows
+# (count law, emitted energy, isotropy, the nu_x g = 4 leg, and the RNG
+# uniformity rows of specs/rng-and-statistical-acceptance.md:118), golden in
+# MCNuX::mcnux_stats_diag. Acceptance |z| <= 4 at the pinned seed and packet
+# count was verified once at golden capture ([MCNX-RNG-07]: no seed
+# shopping); thereafter the archived z values are themselves golden numbers
+# diffed at the harness defaults ABSTOL = RELTOL = 1e-12 (the check is
+# deterministic at pinned seed).
+#
+# Check rows (SIZE=14; layout owned by mcnux_emission.cxx):
+#   4s+0  realized created-packet count of species s vs the pre-floor exact
+#         Sum N_p of the [MCNX-PKT-02] count law, sigma = sqrt(Sum p(1-p))
+#         over the independent per-(cell, bin) Bernoulli remainders;
+#   4s+1  total emitted fluid-frame energy: estimate = E_p * realized count
+#         (each packet carries w * nu = E_p exactly), expected = E_p *
+#         Sum N_p = g_s sqrt(-g) dV dt Sum_b eta_b(s) (the count-law
+#         identity), sigma = E_p * sigma_count — the energy and count z rows
+#         are EXACTLY PROPORTIONAL by construction (same standardized
+#         deviation, scaled estimator). The nu_x rows carry the
+#         [MCNX-CNV-06] g = 4 leg: nu_x emitted energy = 4x the
+#         single-species analytic law, entered once through degeneracy() in
+#         packet_count;
+#   4s+2  cos(theta) sample mean vs 0, sigma = sqrt(1/(3 n_s)) with
+#         Var(U(-1,1)) = 1/3 and n_s the REALIZED count (documented
+#         sample-size choice);
+#   4s+3  phi sample mean vs pi, sigma = pi/sqrt(3 n_s)
+#         (Var(U(0, 2 pi)) = pi^2/3);
+#   12    RNG uniformity sample mean vs 1/2, sigma = 1/sqrt(12 N)
+#         (spec-stated), over the documented tuple sweep q = 1..N of
+#         u(S, q, 0, 0) at S = 1296518744, N = 2^20;
+#   13    RNG uniformity second moment vs 1/3, sigma = sqrt(4/(45 N))
+#         (Var(u^2) = 1/5 - 1/9 = 4/45, benchmark-documented).
+# Sigma formulas are benchmark-owned (mcnux_stats_emission.hxx), per the
+# mcnux_stats.hxx non-goal; z is built by the frozen MCNuX::zscore().
+#
+# Packet-count tuning ([MCNX-VER-07] permits documented deviations from the
+# pinned per-check N_p; the aggregate is pinned here): the count law
+# N_p = g_s sqrt(-g) dV dt eta_b(s)/E_p per (cell, species, bin) scales as
+# 1/E_p, so E_p is the sole tuning knob. With the emission-fixedseed
+# eta_scale values (kept verbatim) the per-species expected emitted energies
+# over the 8^3 grid are ~19.8 (nu_e), ~33.0 (nu_e_bar), ~8.2 (nu_x) MeV;
+# E_p = 6.0e-5 MeV puts the total expected count at ~1.02e6 ~ 2^20 (the
+# pinned statistical packet count) so ALL THREE species emit (a zero-count
+# species is a hard error in the writer). Measured realized totals at
+# capture (the count-row estimates, golden it000001 TSV rows 0/4/8):
+# nu_e 329880, nu_e_bar 549832, nu_x 137478 — total 1017190; every row
+# passed |z| <= 4 at the primary seed (max |z| = 1.92, the nu_x count/energy
+# pair).
+#
+# Iteration 0 output is deterministically defined: packet rows zero-filled
+# (no emission has run), RNG uniformity rows computed (they depend only on
+# the pinned seed/count, not on the run's packets).
+#
+# The per-packet diagnostic mirrors stay OFF (test_emission,
+# test_synthetic_packets, test_fluid_gather: their SIZE=8 tables hard-error
+# at 2^20-scale populations — the stats output is an aggregate reduction,
+# never a per-packet table); the ledger closure is off (covered by
+# emission-fixedseed at small count). No geodesic push is scheduled (it is
+# gated on test_synthetic_packets), so the emission fill pass dominates.
+#
+# ODESolvers must be active: ADMBaseX and HydroBaseX initial data are both
+# scheduled IN ODESolvers_Initial, and the emission loop reads metric and
+# fluid.
+
+ActiveThorns = "
+    CarpetX
+    IOUtil
+    ODESolvers
+    ADMBaseX
+    HydroBaseX
+    MCNuX
+    TestMCNuX
+"
+
+# Mandatory for any MCNuX run: CarpetX's own CCTK_PARAMCHECK routine rejects
+# every other presync mode.
+Cactus::presync_mode = "mixed-error"
+
+# The subject of this benchmark: the production emission loop reduced by the
+# statistical-reduction writer. Every per-packet mirror and the ledger audit
+# stay off (see header).
+MCNuX::enable_emission = yes
+MCNuX::test_stats_emission = yes
+MCNuX::test_emission = no
+MCNuX::test_synthetic_packets = no
+MCNuX::test_fluid_gather = no
+MCNuX::test_synthetic_deposit = no
+MCNuX::test_ledger_closure = no
+MCNuX::run_selftests = no
+
+# The pinned primary statistical seed ([MCNX-RNG-07]; the rng_seed default,
+# restated) and the tuned target packet energy (see the tuning note above).
+MCNuX::rng_seed = 1296518744
+MCNuX::E_p = 6.0e-5
+
+# Analytic coefficient source, all three species emitting: the
+# emission-fixedseed values verbatim (kappa_a0 = 1 so eta_scale alone
+# carries the per-species scale; the nu_x g = 4 enters once in packet_count,
+# so eta_scale[2] sits ~4x below the electron flavors for a comparable
+# count).
+MCNuX::opacity_source = "analytic"
+MCNuX::kappa_a0[0] = 1.0
+MCNuX::kappa_a0[1] = 1.0
+MCNuX::kappa_a0[2] = 1.0
+MCNuX::eta_scale[0] = 2.4e-54
+MCNuX::eta_scale[1] = 4.0e-54
+MCNuX::eta_scale[2] = 2.5e-55
+
+# Flat background: the ADMBaseX defaults, restated.
+ADMBaseX::initial_data = "Cartesian Minkowski"
+ADMBaseX::initial_lapse = "one"
+ADMBaseX::initial_shift = "zero"
+
+# Uniform fluid everywhere (T0 > 0: the analytic Kirchhoff form divides
+# by T).
+HydroBaseX::initial_hydro = "equilibration box"
+TestMCNuX::rho0 = 1.0e12
+TestMCNuX::T0 = 5.0
+TestMCNuX::Ye0 = 0.25
+
+# 8^3 cells over the CarpetX default domain [-1, 1]^3 (dx = 0.25; default
+# dtfac gives dt = 0.125) — the modest grid keeps the emission fill pass
+# dominant at the 2^20 packet scale.
+CarpetX::ncells_x = 8
+CarpetX::ncells_y = 8
+CarpetX::ncells_z = 8
+
+# ONE emission-only step: it000000 is the defined zero/RNG-only snapshot,
+# it000001 the single real emission pass reduced into the check rows.
+Cactus::cctk_itlast = 1
+
+IO::out_dir = $parfile
+IO::out_every = 1
+IO::parfile_write = no
+
+# Keep the column-label header but drop IOUtil's creation date, hostname, and
+# absolute parameter-file path (see unit-selftest.par).
+IO::out_fileinfo = "axis labels"
+
+CarpetX::out_metadata = no
+
+# The golden data: the statistical-check verdict table only.
+CarpetX::out_tsv_vars = "
+    MCNuX::mcnux_stats_diag
+"
