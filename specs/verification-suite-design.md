@@ -397,7 +397,7 @@ names: benchmarks per [MCNX-VER-06]/[MCNX-VER-07]; `selftest:` legs of
 | [MCNX-GPU-02] | gate: GPU-backend build of every per-packet operator as device kernels + by-value POD capture inspection |
 | [MCNX-GPU-03] | gate: compile-time schema check (one SoA component per physical component, binary64); emission-fixedseed |
 | [MCNX-GPU-04] | interactions-fixedseed id-contract leg (uniqueness, immutability, retirement, bit 63 clear) |
-| [MCNX-GPU-05] | ownership-multibox (`OK()`-style placement check after every step) |
+| [MCNX-GPU-05] | escape-freestream (escape-tally clause: per-species escape tallies at the outer boundary); ownership-multibox (`OK()`-style placement check after every step) |
 | [MCNX-GPU-06] | ownership-multibox (bounded-motion audit: measured ≤ derived; regrid leg redistributes before next transport op) |
 | [MCNX-GPU-07] | gate: inspection — no host per-particle loops, no AoS container in MCNuX; mech: anti-pattern needle in both technical specs |
 | [MCNX-GPU-08] | gate: load-lifecycle check (table source + nonexistent/malformed table path aborts before evolution; valid paths read each baseline table exactly once per run via a load-count observable) |

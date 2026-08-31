@@ -1,0 +1,119 @@
+# TODO — MCNuX build plan
+
+Current state, not greenfield: the core transport pipeline is built and verified — units/conventions, geodesic propagation (including the Schwarzschild 3-leg convergence study), RNG core, packet representation/emission, the exact-tier interaction episode driver (scatter + absorb, fixed-seed goldens), escape tallies, the hydro gather + source-term ledger, and all build/integration plumbing bind their specs. Remaining work falls into four threads: (1) trapped-regime runtime wiring plus the diffusion approximation, (2) the table-residency chain that makes `opacity_source="table"` real at runtime, (3) the statistical (`stats-*`) and integration benchmark tier of the verification suite, and (4) optional capabilities/hygiene (Tmunu, audit automation).
+
+## Standing facts every item inherits
+
+- The selftest row table in `mcnux_selftest.cxx` is APPEND-ONLY; the next free row index is **162** (rows 0..161 occupied per `mcnux_selftest.cxx:347-469`). New checks go in a per-domain `mcnux_selftest_<domain>.cxx` with the appender declared in `mcnux_selftest.hxx`. Several tasks below append rows — each task claims the then-current next index at build time; never renumber.
+- Golden TSVs are captured from sandbox harness runs, never hand-authored; the first run against an empty golden dir is the capture step. The harness diffs at ABSTOL=RELTOL=1e-12 (`MCNuX/test/test.ccl`, no per-test blocks).
+- Stats-tier sigma formulas live in benchmark-owned headers (precedent `mcnux_stats_emission.hxx`), never in `mcnux_stats.hxx`. Stats writers follow the `MCNuX_StatsEmission` pattern (`mcnux_emission.cxx:629-704`, schedule precedent `MCNuX/schedule.ccl:425-433`): per-species device accumulator → estimate/expected/sigma/z rows via `MCNuX::zscore`, 4σ bar, `stats_seed_primary=1296518744`, `stats_default_num_packets=1048576` (`mcnux_stats.hxx:58-68`).
+- The stats benchmarks below (stats-beam, stats-scatterbox, stats-equilibration, stats-diffusion, trp-overlap-consistency) all reuse `MCNuX::zscore` (`mcnux_stats.hxx:91-95`) + the writer/schedule pattern; the first one built (stats-beam) should factor a shared writer scaffold so the later ones don't quadruplicate it. Collectively they broaden [MCNX-RNG-07] coverage ("all stats-* benchmarks", `verification-suite-design.md:352`).
+- Table consumers use `RangedTableCoefficients`, never the bare `BaselineTableCoefficients` assembly.
+
+## Tier 1 — Trapped-regime wiring, first stats benchmarks, table residency
+
+- [ ] Wire trapped-regime relabeling + α-selection rule into the runtime [MCNX-TRP-02 completion, MCNX-TRP-04]
+  - spec: specs/trapped-regime-treatment.md:107-121 (substitute η′,κ_a′,κ_s′ "into emission/event sampling and nowhere else"), :145-171 (per-cell `α = min(1, ξ/(κ_a Δt_c))`, runtime ξ, scheme selector, fixed-α override); the spec's own resolutions at :463-557 are normative; the β-dependent Eq.50 bound (:450-455) is explicitly deferred — only `κ_a′Δt_c ≤ ξ` is binding
+  - tests: new selftest rows (162+) in a new `mcnux_selftest_trp_select.cxx`: α-selection rule reproduction fixtures (clamp at 1, ξ scaling), fixed-α override behavior, and the `κ_a′Δt_c ≤ ξ` invariant check (specs/verification-suite-design.md:374); paramcheck/gate behavior for invalid selector combos if any; existing goldens must stay bitwise-identical when the scheme is deselected (default off)
+  - notes: the pure `relabel()` map exists and is fully verified (`mcnux_trp.hxx:60-64`, static_asserts :92-139, selftest rows 66-70) but is never called from any runtime driver — `mcnux_interactions.cxx:110-112` and `mcnux_emission.cxx` call unprimed `evaluate_coefficients()` only; no α/ξ/scheme-selector parameter exists anywhere in `param.ccl` (grep empty). Insertion points flagged in-code: `mcnux_interactions.cxx:104-112`, `mcnux_coefficients.hxx:51-58`, `mcnux_interactions.hxx:43-50`. Unblocks the alpha-limit pair and the equilibration relabeled leg.
+
+- [ ] `trp-alpha-limit-explicit` / `trp-alpha-limit-relabeled` benchmark pair [MCNX-TRP-05]
+  - spec: specs/trapped-regime-treatment.md:173-181; specs/verification-suite-design.md:247,328-329,375
+  - tests: two parfiles diffing against the **same** golden numbers (capture from the explicit run) at 1e-12 — bitwise α→1 identity; the algebraic endpoint is already covered by selftest row 70 (`trp.relabel.alpha_one_identity`); this task delivers the harness-level identity
+  - notes: depends on the relabeling-wiring task above. Equilibration-box background (TestMCNuX `initial_hydro = "equilibration box"`, writer already exists in `hydro_profiles.cxx`), analytic mode, single rank, same seed; relabeled parfile pins fixed-α override to α=1.
+
+- [ ] `stats-beam` statistical benchmark [MCNX-INT-01/-03, MCNX-VER-07]
+  - spec: specs/neutrino-matter-interactions.md:197-201 (transmitted fraction = `exp(−κ_a L)` within 4σ); specs/verification-suite-design.md:265 (η_scale=0 pure-absorber slab)
+  - tests: parfile + captured golden `stats_diag` TSV with all |z| ≤ 4σ rows archived; selftest rows for the new sigma formulas (rational-form compile-time fixtures per `mcnux_stats_emission.hxx:122-140` precedent)
+  - notes: independent of all TRP work; buildable now against existing analytic mode. `absorb-smoke.par:6` already reserves the name. Needs a collimated monoenergetic beam fixture — decide at task time between extending the synthetic-packet seeding fixture (`mcnux_geodesic.cxx:209-286`) with a beam mode vs. a new TestMCNuX profile keyword, from specs/verification-suite-design.md:265's background wording. Needs a benchmark-owned sigma header (Bernoulli/binomial transmission-fraction SE) + gated stats writer; factor the shared writer scaffold here for the later stats benchmarks.
+
+- [ ] `stats-scatterbox` statistical benchmark [MCNX-INT-02/-04, MCNX-VER-07]
+  - spec: specs/neutrino-matter-interactions.md:202-207 (collision counts Poisson with mean `κ_s ℓ_path`; post-scatter isotropy: first moments of cosθ and φ within 4σ); specs/verification-suite-design.md:266
+  - tests: parfile + golden stats TSV, |z| ≤ 4σ; compile-time sigma-formula fixtures
+  - notes: uniform pure-scattering box, analytic mode; same machinery pattern as stats-beam (sigma header: Poisson mean/variance + isotropy-moment sigmas; writer; goldens). Selftest row 148 (`int.scatter.flat_isotropy`) is a formula-level exact check, not this statistical-sample check.
+
+- [ ] Table-residency load/upload layer [MCNX-GPU-08, MCNX-GPU-09; enables MCNX-OPA-04..07 at runtime]
+  - spec: specs/particle-container-and-gpu.md:267-298 (residency mechanics; evaluation semantics belong to specs/opacity-eos-evaluation.md); production filenames pinned at specs/opacity-eos-evaluation.md:78-89
+  - tests: load-lifecycle gate under `agent_scripts/gates/` (bad path → abort before evolution with documented reason; valid path → loads exactly once), per particle-container-and-gpu.md:369-372 and the `gate_paramcheck.sh` pattern; residency-parity check (host vs device-resident-view evaluation bitwise identical, :373-377) as selftest rows or a gate
+  - notes: load-bearing for the whole table chain. No table-residency layer exists anywhere in `MCNuX/src` (grep for `ResidentTable|read_eos_table|read_emab_table|read_scat_iso_table|wli::io` — zero hits); both runtime consumers construct `RangedTableCoefficients` with null views (`mcnux_interactions.cxx:100-112`, `mcnux_emission.cxx:125-132`), safe only because `mcnux_paramcheck.cxx:37-53` hard-forbids `opacity_source="table"` with `enable_emission`/`enable_interactions`. Scope: `param.ccl` table-path parameters (none exist today, `param.ccl:101-137`); once-per-run load via WeakLibInterp readers (`WeakLibInterp/src/io/wli_io_eos.H:34-112`, `wli_io_opacity.H`); device upload via `wli::ResidentTable<D>` (`WeakLibInterp/src/core/wli_table.H:60-134`); populate a live `BaselineTableViews` (`mcnux_table_coeffs.hxx:105`); hard-fail before evolution on missing/malformed tables. FIRST confirm the sandbox weaklib `.h5` path (`agent_scripts/sandbox/setup.sh` performs a "weaklib-table symlink"; only `.h5ls` structural snapshots were located under `WeakLibInterp/specs/fixtures/`) before writing the parfile/gate.
+
+- [ ] Wire table source into consumers + relax the paramcheck guard [MCNX-GPU-10, MCNX-OPA-06 runtime]
+  - spec: specs/particle-container-and-gpu.md:300-312 (guard relaxation only when all of criteria (a)-(d) hold)
+  - tests: an end-to-end table-source fixed-seed benchmark (analogue of `emission-fixedseed`/`interactions-fixedseed`, golden-captured) giving the assembly/range-policy code its first runtime coverage; guard-relaxation gate fixture per :378-382 (table mode + unmet criteria still aborts in configs where criteria don't hold)
+  - notes: blocked on the residency-layer task. Replace the null-view `RangedTableCoefficients` instances at `mcnux_interactions.cxx:112` and `mcnux_emission.cxx:132` with the loaded views; convert emission's log10 `emab_LogEs` bin grid to the linear MeV grid (deferral documented at `mcnux_emission.cxx:70-77`); flip `mcnux_paramcheck.cxx:37-53` from unconditional abort to the criteria-gated relaxation. Per [MCNX-GPU-10]'s all-of-(a)-(d) rule the guard flip cannot precede the loader.
+
+- [ ] Clamp-counter runtime diagnostic surface [MCNX-GPU-11]
+  - spec: specs/particle-container-and-gpu.md:314-324
+  - tests: extend the table-source benchmark (or a dedicated parfile) with a fixture that deliberately drives off-table samples, golden-capturing nonzero clamp counts; selftest rows for the aggregation arithmetic
+  - notes: blocked on the two table tasks above. `mcnux_table_range.hxx:174-210` implements per-axis clamp counters (`c.E/c.rho/c.T/c.Ye`) but nothing aggregates them across launches or surfaces them as an observable. Build a gated `mcnux_clamp_diag` grid-array writer on the `mcnux_escape_diag` precedent (`mcnux_escape.cxx:32-69`, SIZE-agreement abort idiom).
+
+- [ ] `stats-equilibration-explicit` / `stats-equilibration-relabeled` pair [MCNX-TRP-01/-04, MCNX-OPA-04, MCNX-CNV-05, MCNX-VER-04/-05]
+  - spec: specs/verification-suite-design.md:267-276,344,374
+  - tests: two parfiles + golden stats TSVs, |z| ≤ 4σ; sigma header for spectrum-moment comparisons; event-count-reduction observable in the relabeled leg
+  - notes: equilibration-box background; explicit leg checks spectrum/energy density vs analytic `J_eq` and is buildable independently of the relabeling wiring; the relabeled leg (α<1 with measured event-count reduction and the per-cell `κ_a′Δt_c ≤ ξ` diagnostic) is blocked on it. The spec pairs both legs on one background family — one natural increment.
+
+## Tier 2 — Diffusion approximation chain + remaining integration benchmarks
+
+- [ ] Diffusion-approximation pure functions [MCNX-TRP-06, MCNX-TRP-08, MCNX-TRP-09]
+  - spec: specs/trapped-regime-treatment.md:182-278 (regime entry after each performed scattering; two-branch P-driven displacement draw with closed-form `F(r̃)` inversion to ≤1e-12; two-leg advection/geodesic position update); resolutions at :463-557 are normative (criterion evaluated after every performed scattering, no absorption draw during diffusion, advection-leg 4-velocity form, coefficients/tetrad pinned to the scattering cell)
+  - tests: compile-time static_asserts (branch-selection fixtures, F-inversion round-trip at ≤1e-12, position-update leg identities in the flat limit) + new selftest rows in `mcnux_selftest_diffusion.cxx`
+  - notes: new header (e.g. `mcnux_diffusion.hxx`, included from `stub.cxx`) — pure functions only, no driver wiring yet; independently buildable+testable at the pure-function tier. `mcnux_geodesic.hxx:376-386` (`dt_to_face_exit`) deliberately duplicates `mcnux_interactions.hxx`'s `dt_to_cell_exit` (documented deferral, not a defect); this task's position-update work touches both seams — if a shared kinematics header emerges naturally, fold the consolidation in; otherwise leave.
+
+- [ ] Diffusion momentum model + RNG draw map [MCNX-TRP-10, MCNX-TRP-07]
+  - spec: specs/trapped-regime-treatment.md:279-322 (21-value `B_i(f_free)` table at :296-301, linear interpolation, θ₂ draw with the atom-branch pin `cosθ₂=1` exactly at `f_free=1`, tetrad-mapped per MCNX-PKT-04 reusing `mcnux_tetrad.hxx`); :323-339 (fixed unconditional 5-draw sequence `k=0..4`, `u(S,q,e,k)` convention with event-counter increment — extend the `mcnux_interactions.hxx:260-289` draw-map-wrapper pattern)
+  - tests: static_asserts + selftest rows: B-table endpoint/interpolation fixtures, atom-branch exactness at f_free=1, bit-exact draw-map fixtures (precedent: `mcnux_selftest_emission.cxx:91-162`)
+  - notes: pairs with the pure-function task above; both precede driver wiring.
+
+- [ ] Wire the diffusion episode into the runtime driver [MCNX-TRP-06 runtime seam]
+  - spec: specs/trapped-regime-treatment.md:182-278 as wired through the [MCNX-INT-04] episode seam
+  - tests: existing deterministic goldens (`interactions-fixedseed`, `absorb-smoke`) must remain bitwise-identical with diffusion deselected/never-triggered; a new fixed-seed deterministic golden exercising the diffusion branch — the VER-06 matrix at specs/verification-suite-design.md:376-379 claims `interactions-fixedseed` covers TRP diffusion legs but today's parfile does not: either extend it (re-capturing goldens) or add a sibling fixedseed test and flag the matrix row
+  - notes: blocked on the two diffusion tasks above. Insert the post-scattering regime check and diffusion remainder-of-step outcome into `MCNuX_EpisodeDriver` (`mcnux_interactions.cxx:96-429`) as the alternate outcome after a performed scattering. Needs a `τ_diff` runtime parameter (none exists).
+
+- [ ] `stats-diffusion` benchmark [MCNX-TRP-08/-09/-10, MCNX-VER-07]
+  - spec: specs/verification-suite-design.md:270-276 (atom frequency vs `exp(−κ_s′Δt′_rem)`; r̃ moments; sampled cosθ₂ distribution)
+  - tests: parfile + golden stats TSV, |z| ≤ 4σ; compile-time sigma fixtures
+  - notes: blocked on the diffusion driver wiring; sigma header + writer + golden per the stats-tier pattern.
+
+- [ ] `trp-overlap-consistency` benchmark [MCNX-TRP-06 overlap half, MCNX-VER-07]
+  - spec: specs/verification-suite-design.md:266-276,376
+  - tests: parfile(s) + golden stats TSV, 4σ comparison rows
+  - notes: blocked on the diffusion driver wiring. Runs pinned just above/below `τ_diff`; statistical comparison of end-of-step position/direction distributions across the two legs. `interactions-fixedseed` covers only the "prelude handoff, regime decision" half.
+
+- [ ] `cadence-lag` benchmark [MCNX-CTX-05, MCNX-HYD-01/-03/-04]
+  - spec: specs/carpetx-thorn-integration.md:196-203; specs/verification-suite-design.md:246,389-392,411; checkpoint/recovery leg per specs/hydro-coupling-source-terms.md:253-254
+  - tests: parfile + golden TSVs at 1e-12 (counter + source-tally checksums); if the harness can't express the recovery leg (restart midway between transport and partner-read point), split that leg into a gate
+  - notes: no test outputs `MCNuX::mcnux_transport_diag` as golden data (grep: zero hits) and no test runs ODESolvers with a genuinely evolved variable (`schwarzschild-pt.par:52-54` notes "ODESolvers_Solve only warns"). Build: uniform-sphere/analytic-mode parfile with ODESolvers evolving a (trivial) state so RK4 substeps execute; golden `mcnux_transport_diag` across several iterations proving the counter advances once per `CCTK_EVOL` (4 RHS evals → 1 advance); a step-function fluid-state change at iteration n whose source-term effect appears at n+1 (one-step lag). Counter machinery already exists (`mcnux_cadence.cxx:68-89`, storage always-on `schedule.ccl:36`). Together with ownership-multibox this closes the last two [MCNX-VER-06] binding-table rows.
+
+- [ ] `ownership-multibox` benchmark [MCNX-GPU-05 placement clause, MCNX-GPU-06, MCNX-CTX-03]
+  - spec: specs/verification-suite-design.md:245,400; specs/particle-container-and-gpu.md:350-353
+  - tests: parfile + golden `mcnux_packet_diag` TSVs at 1e-12; a gated runtime assertion routine (abort on placement violation) so failure is loud, plus the invocation-counter golden observable
+  - notes: Minkowski, ≥2 boxes per rank (force via small `CarpetX::max_grid_size`), packets crossing box boundaries; an `OK()`-style post-step placement assertion (no `.OK()` call exists anywhere in `MCNuX/src`) and a per-invocation counter proving one call per (patch, level) traversal (not per tile). Variant of `minkowski-freestream`/`escape-freestream`. Bounded-motion audit is vacuous under the current global `Redistribute()` (spec-permitted; sites `mcnux_geodesic.cxx:366`, `mcnux_interactions.cxx:404`, `mcnux_emission.cxx:459`) — document, don't implement local redistribution. One task, not two, despite being cross-listed in two specs' findings; also closes [MCNX-CTX-03]'s matrix row.
+
+## Tier 3 — Optional capabilities & hygiene
+
+- [ ] Tmunu stress-energy contribution [MCNX-HYD-06] (optional capability, default off)
+  - spec: specs/hydro-coupling-source-terms.md:190-222
+  - tests: selftest rows per specs/verification-suite-design.md:394 (one-packet closed form, uniform/linear `q`-field exactness, vertex-total identity); a small golden benchmark outputting `eTtt/...` for a fixed synthetic packet set; existing goldens unchanged with the parameter off
+  - notes: entirely unimplemented — no `REQUIRES TmunuBaseX`, no writer, no schedule entry, no parameter (repo-wide grep confirms; only a forward-looking comment `mcnux_selftest.cxx:35`). Scope: `REQUIRES TmunuBaseX` in configuration.ccl, enable parameter default off, routine `IN TmunuBaseX_AddToTmunu` computing per-cell `q_{μν}` from the live packet population (needs `p_μ`, `p_t = −α²p^t + β^i p_i`, `√γ α`; population accessors owned by `mcnux_geodesic.cxx`) with the 8-point cell-to-vertex average into `eTtt/eTti/eTij`. Diagnostic-grade either/or capability only — the partner double-counting protocol is an explicitly deferred spec open question (:330-336).
+
+- [ ] Verify (then maybe close) ledger closure with both real contributors simultaneously [MCNX-HYD-05 breadth]
+  - spec: specs/hydro-coupling-source-terms.md ([MCNX-HYD-05])
+  - tests: golden `mcnux_ledger_diag` rows with closure at `ledger_rtol = 1e-13` (`mcnux_srcterms.hxx:165`)
+  - notes: verify-first task. `MCNuX_LedgerClosure` folds `emission_step_audit()` and `interaction_step_audit()` unconditionally (`mcnux_srcterms.cxx:239-250`); paramcheck only forbids synthetic+real mixes (`mcnux_paramcheck.cxx:60-85`), not emission+interactions together. First check whether `interactions-fixedseed.par` already runs `test_ledger_closure` with both `enable_emission` and `enable_interactions` (findings describe it as a mixed emission+scatter+absorb chain with ledger closure — likely already covered). If covered: no-op, check this off. If not: enable `test_ledger_closure` there (re-capture goldens) or add a small combined parfile. Low cost.
+
+- [ ] Automate the layout/activation-split audits [MCNX-BLD-01/-06 verification]
+  - spec: specs/build-and-integration.md:186-206 (both labeled "(exact)")
+  - tests: the script itself is the test (exact exit-code check); wire into `.github/workflows/ci.yml` alongside `validate-specs`
+  - notes: no committed script enforces these; they hold today only by inspection. New `agent_scripts/*.sh` gate or CI step: sweep committed `*.par` for `TestMCNuX` in `ActiveThorns` outside `MCNuX/test/`; assert `TestMCNuX/test/` absent; assert repo root has exactly the two thorn dirs + documented non-thorn dirs.
+
+## Decisions & non-blocking spec items
+
+- Creation-time propagation semantics [MCNX-PKT vs runtime]: `packet-representation-and-sampling.md:116-117` says newly created packets propagate from their creation time to end-of-step; the runtime consumes the creation-time uniform per the draw map but discards it — packets get their first full-dt push next step (documented deferral, `mcnux_emission.cxx:22-25,380-382`). Decide: amend the spec prose to permit full-dt-next-step semantics, or open a coordinated PKT/GEO implementation task. Do NOT silently implement partial-step propagation without a spec decision.
+- Sandbox weaklib `.h5` availability: confirm the actual pinned table path created by the `agent_scripts/sandbox/setup.sh` "weaklib-table symlink" before starting the table-residency task (only `.h5ls` structural snapshots were located under `WeakLibInterp/specs/fixtures/`).
+- Recovery-leg expressibility: whether checkpoint/recovery in the `cadence-lag` benchmark is expressible in the Cactus test harness or must be a non-harness gate — resolve at task time.
+- `stats_seed_secondary` (20260730) remains unconsumed; the spec frames it as optional non-golden cross-checks (`verification-suite-design.md:493`). Decision: leave unexercised, no task.
+- [MCNX-INT-05] "coefficient provenance parity" selftest row (`verification-suite-design.md:369`): the runtime path is a single call site (`mcnux_interactions.cxx:259-263`) so no behavior can diverge. No task unless the corpus linter enforces row-name matching (unverified).
+- `specs/.ralph/logs/` (transient prior plan logs committed under `specs/`): gitignore or keep — cosmetic housekeeping, owner's call.
+- Spec corrections resolved this plan run: the stale [MCNX-GPU-05] VER-06 matrix row in `verification-suite-design.md` now credits the built `escape-freestream` for the escape-tally clause (ownership-multibox keeps the placement clause). The reported wrong hex gloss of `stats_seed_primary` in `rng-and-statistical-acceptance.md:104` was checked and found already correct (0x4D474E58 = 1296518744) — no edit was needed.
+
+## Discovered since last plan
