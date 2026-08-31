@@ -35,8 +35,10 @@ Headers:
 - `mcnux_emission.hxx` — emission pure functions: count law with floor/Bernoulli remainder, bin-center energy/weight, `K_cell` packing + capacity guard, creation RNG draw map (`draw_k_creation_*`), bin-integrated-eta bridge.
 - `mcnux_fluid.hxx` — cell-centered HydroBaseX fluid-state gather (`CellFluidGather`/`FluidSample`, containing-cell, no sub-cell interpolation) + Valencia v^i→u^μ lift.
 - `mcnux_stats.hxx` — 4σ statistical-acceptance reduction; pinned seed and packet-count constants.
+- `mcnux_stats_emission.hxx` — benchmark-owned analytic sigma formulas for the stats-* tier (Bernoulli-sum, uniform mean/second-moment, isotropy cosθ/φ); sigmas never live in `mcnux_stats.hxx`.
 - `mcnux_gather.hxx` — shared runtime gather/walk helpers (metric/hydro group lookups, `make_gather`/`make_fluid_gather`, `for_each_packet_tile[_raw]`, shared `fill_packet_diag`); does the CarpetX `driver.hxx` relative include itself.
 - `mcnux_deposit.hxx` — shared atomic source-term deposition ([MCNX-GPU-02] idiom): `SourceViews` + `deposit_delta` via `Gpu::Atomic::AddNoRet`.
+- `mcnux_escape.hxx` — escape-tally arithmetic ([MCNX-GPU-05]): species-major `escape_slot` map, half-open `outside_domain` predicate, `EscapeTally`, `escape_run_tally()` decl; header comment pins the storage-surface decision and the p^t/last-in-domain-anchor energy convention (escapes never join the ledger closure).
 
 Compiled sources:
 
@@ -46,7 +48,8 @@ Compiled sources:
 - `mcnux_srcterms.cxx` — source-term zeroing + synthetic-deposit contributor + `MCNuX_LedgerClosure` diagnostic (rank-local unigrid `amrex::ReduceSum` grid reduction, gated `test_ledger_closure`, writes `mcnux_ledger_diag`).
 - `mcnux_geodesic.cxx` — runtime packet-population owner (lazy per-patch containers), synthetic-packet seeding fixture, geodesic push scheduled `IN MCNuX_TransportStep`, fluid-gather diagnostic routine (`MCNuX_FluidGatherDiag`, gated `test_fluid_gather`).
 - `mcnux_interactions.cxx` — runtime episode driver (`MCNuX_EpisodeDriver`, gated `enable_interactions`, IN MCNuX_TransportStep): per-packet episode loop with frozen kinematics, scattering event application via `scatter_redraw` + C2 deposit, absorption event application (full-content `absorption_delta` deposit + `make_invalid`-then-`Redistribute` removal, id values retired, 14-slot audit incl. absorption count), `interaction_step_audit()` owner; also owns `MCNuX_IdContractCheck` (gated `test_id_contract`, the runtime [MCNX-GPU-04] id-contract guard on repacked logical keys); documents the driver-local cell-boundary conventions (direction-aware entry adjustment, 4·eps exit-bound inflation).
-- `mcnux_emission.cxx` — runtime emission/creation loop (`MCNuX_Emission`, gated `enable_emission`, IN MCNuX_AddToSourceTerms): count pass → id reservation → SoA append fill pass, C2 deposit + `emission_step_audit()` owner, analytic fixture energy grid, emission diag routine (gated `test_emission`).
+- `mcnux_emission.cxx` — runtime emission/creation loop (`MCNuX_Emission`, gated `enable_emission`, IN MCNuX_AddToSourceTerms): count pass → id reservation → SoA append fill pass, C2 deposit + `emission_step_audit()` owner, analytic fixture energy grid, emission diag routine (gated `test_emission`); also owns `MCNuX_StatsEmission` (gated `test_stats_emission`, the stats-tier 4σ writer: per-species device accumulator → `mcnux_stats_diag` estimate/expected/sigma/z rows via `MCNuX::zscore`, incl. the RNG-uniformity rows).
+- `mcnux_escape.cxx` — cumulative escape-tally owner: TU-local `escape_run_tally()` (fed by always-on detection/`make_invalid` removal at the geodesic-push and episode-driver sites; emission is a proven non-escape site) + `MCNuX_EscapeDiag` writer (gated `test_escape_tallies`, writes `mcnux_escape_diag`).
 - `mcnux_selftest.cxx` / `mcnux_selftest.hxx` / `mcnux_selftest_<domain>.cxx` — runtime selftest battery: core row table and ordered appender sequence in the first, shared machinery and appender declarations in the header, check code in the per-domain files.
 - `stub.cxx` — compile-time selftest aggregation point.
 
@@ -66,7 +69,7 @@ Compiled sources:
 
 ## Testing
 
-- `MCNuX/test/` is the Cactus test home: `test.ccl` (`NPROCS 1`), `<name>.par` parfiles, `<name>/` golden dirs. Current tests: `unit-selftest`, `source-zero-add`, `minkowski-freestream`, `schwarzschild-id`, `hydro-sphere-id`, `hydro-sphere-gather`, `emit-smoke`, `interactions-fixedseed`, `absorb-smoke`.
+- `MCNuX/test/` is the Cactus test home: `test.ccl` (`NPROCS 1`), `<name>.par` parfiles, `<name>/` golden dirs. Current tests: `unit-selftest`, `source-zero-add`, `minkowski-freestream`, `schwarzschild-id`, `hydro-sphere-id`, `hydro-sphere-gather`, `emit-smoke`, `interactions-fixedseed`, `absorb-smoke`, `emission-fixedseed`, `schwarzschild-pt{,-dt2,-dt4}`, `stats-emission`, `escape-freestream`.
 - Golden TSVs are copied verbatim from sandbox harness runs, never hand-authored. Harness discovery: a `test/<name>.par` is only runnable once its golden dir `test/<name>/` exists; the first run against an empty golden dir is the capture step (vacuous "0 files identical").
 - Parfile requirements: every MCNuX parfile needs `Cactus::presync_mode = "mixed-error"` and both `ADMBaseX` and `HydroBaseX` in `ActiveThorns` (MCNuX `INHERITS: ADMBaseX HydroBaseX`); runs that read the metric also need `ODESolvers` active (ADMBaseX initial data is scheduled only `IN ODESolvers_Initial`).
 - CarpetX/AMReX rejects domains < 8 cells per direction (blocking_factor); off-origin test boxes must set `IO::out_{x,y,z}line_*` inside the domain.

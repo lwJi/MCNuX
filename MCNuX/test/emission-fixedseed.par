@@ -1,0 +1,148 @@
+# emission-fixedseed — the pinned [MCNX-VER-06] fixed-seed emission benchmark
+# of specs/verification-suite-design.md:243: equilibration box, analytic
+# mode, ONE emission-only step, exact packet set (ids, states) golden;
+# bin-center energies; count law; creation draw-map audit ([MCNX-PKT-05]).
+#
+# Uniform fluid (TestMCNuX "equilibration box": constant rho0, T0, Ye0,
+# vel = 0) on flat Minkowski, analytic Kirchhoff-form coefficients with ALL
+# THREE species emitting: eta_scale[0..2] are individually tuned (the run is
+# fully deterministic at the pinned seed, so tune-then-capture) so that the
+# single transport step creates at least one packet of every species —
+# including nu_x, whose degeneracy g = 4 enters once in the count law — with
+# the run's TOTAL issued id count in 1..8: both per-packet tables key rows by
+# packet id - 1 and hard-error above their declared SIZE=8, so that abort is
+# itself the tuning signal. Realized set at capture: 5 packets — id 1
+# nu_e_bar (20 MeV), id 2 nu_x (20 MeV), id 3 nu_e (20 MeV), id 4 nu_x
+# (10 MeV), id 5 nu_x (20 MeV) — every species >= 1 and both bin centers
+# exercised.
+#
+# Golden output at every iteration (it000000 = defined all-zero
+# empty-population tables, it000001 = the one real emission pass; harness
+# defaults ABSTOL = RELTOL = 1e-12):
+#   * MCNuX::mcnux_emission_diag — the discrete identity half of the exact
+#     packet set [MCNX-PKT-01]: AMReX id, weight N = E_p/nu (em_w = 1.0 for
+#     the 10 MeV bin center, 0.5 for 20 MeV — bin-center exactness and the
+#     weight law of [MCNX-PKT-03]), species index 0/1/2 (all three present),
+#     event counter 0.
+#   * MCNuX::mcnux_packet_diag — the continuous half: position uniform in the
+#     creation cell, lower momentum p_i = nu_code n_hat_i on flat static
+#     data, p_t = -nu_code with nu the MeV->code-converted bin center.
+#   * MCNuX::mcnux_ledger_diag — the [MCNX-HYD-05] five-channel closure
+#     verdict, lg_pass = 1 on every channel (corroborating evidence that the
+#     deposited ledger deltas match the realized packet set).
+# The realized packet set IS the floor + Bernoulli-remainder count-law
+# observable of [MCNX-PKT-02]: every per-(cell, species, bin) expected count
+# here is < 1, so each created packet is one Bernoulli round-up at the pinned
+# per-cell uniform.
+#
+# Creation draw-map audit ([MCNX-PKT-05]) — RESOLVED FORM, no dedicated
+# (q, e, k) trace artifact (the interactions-fixedseed precedent; the
+# sampling spec mandates the pinned map, not a literal trace). The audit is:
+# (a) this benchmark's exact-tier golden packet-set parity at the fixed seed
+# on a single rank, hand-verifiable against the pinned creation map
+# (draw_k_creation_* / cell_count_uniform of mcnux_emission.hxx); (b)
+# run-twice bitwise identity ([MCNX-RNG-06]): at capture the parfile was run
+# twice and every output TSV byte-compared identical; (c) the existing
+# selftest wrapper-vs-u() rows of mcnux_selftest_emission.cxx. The k = 3
+# creation-time draw is consumed by the pinned map but not stored (the
+# packet state carries no creation time), so "time" is drawn-but-not-asserted
+# here — deliberately no time observable is invented.
+#
+# The analytic-mode energy grid is the pinned fixture grid of
+# mcnux_emission.cxx: nodes {5, 15, 25} MeV -> 2 bins, centers 10 and
+# 20 MeV. No geodesic push runs (test_synthetic_packets is forbidden with
+# enable_emission), so created packets keep their creation state.
+#
+# ODESolvers must be active: ADMBaseX and HydroBaseX initial data are both
+# scheduled IN ODESolvers_Initial, and the emission loop reads metric and
+# fluid.
+
+ActiveThorns = "
+    CarpetX
+    IOUtil
+    ODESolvers
+    ADMBaseX
+    HydroBaseX
+    MCNuX
+    TestMCNuX
+"
+
+# Mandatory for any MCNuX run: CarpetX's own CCTK_PARAMCHECK routine rejects
+# every other presync mode.
+Cactus::presync_mode = "mixed-error"
+
+# The subject of this benchmark: the production emission loop plus its
+# diagnostic mirrors, with the [MCNX-HYD-05] conservation-ledger closure
+# auditing the real emission events (event side from emission_step_audit(),
+# grid side multiplied by the real cell volume dV = 0.25^3 times dt = 0.125;
+# any failing channel aborts the run). The synthetic fixtures stay off
+# (test_synthetic_deposit with enable_emission under the closure is forbidden
+# at PARAMCHECK — different dV*dt pairs).
+MCNuX::enable_emission = yes
+MCNuX::test_emission = yes
+MCNuX::test_synthetic_packets = no
+MCNuX::test_synthetic_deposit = no
+MCNuX::test_ledger_closure = yes
+MCNuX::run_selftests = no
+
+# The pinned primary seed (the rng_seed default, restated) and the default
+# target packet energy, restated for determinism-audit clarity.
+MCNuX::rng_seed = 1296518744
+MCNuX::E_p = 10.0
+
+# Analytic coefficient source, all three species emitting. kappa_a0[s]
+# enters eta multiplicatively (eta = eta_scale * c * kappa_a0 * Kirchhoff
+# form) and is set to 1 for every species so eta_scale[s] alone carries the
+# per-species tuning; the Kirchhoff form itself is species-symmetric at
+# mu_nu = 0, and the nu_x degeneracy g = 4 enters once in packet_count, so
+# eta_scale[2] sits ~4x below the electron-flavor scales for a comparable
+# expected count. Tuned (see header) so the single step creates >= 1 packet
+# of each species with total ids <= 8.
+MCNuX::opacity_source = "analytic"
+MCNuX::kappa_a0[0] = 1.0
+MCNuX::kappa_a0[1] = 1.0
+MCNuX::kappa_a0[2] = 1.0
+MCNuX::eta_scale[0] = 2.4e-54
+MCNuX::eta_scale[1] = 4.0e-54
+MCNuX::eta_scale[2] = 2.5e-55
+
+# Flat background: the ADMBaseX defaults, restated.
+ADMBaseX::initial_data = "Cartesian Minkowski"
+ADMBaseX::initial_lapse = "one"
+ADMBaseX::initial_shift = "zero"
+
+# Uniform fluid everywhere (T0 > 0: the analytic Kirchhoff form divides
+# by T).
+HydroBaseX::initial_hydro = "equilibration box"
+TestMCNuX::rho0 = 1.0e12
+TestMCNuX::T0 = 5.0
+TestMCNuX::Ye0 = 0.25
+
+# 8^3 cells over the CarpetX default domain [-1, 1]^3 (dx = 0.25; default
+# dtfac gives dt = 0.125).
+CarpetX::ncells_x = 8
+CarpetX::ncells_y = 8
+CarpetX::ncells_z = 8
+
+# ONE emission-only step (the spec row's setup): it000000 is the defined
+# all-zero snapshot, it000001 the single real emission pass.
+Cactus::cctk_itlast = 1
+
+IO::out_dir = $parfile
+IO::out_every = 1
+IO::parfile_write = no
+
+# Keep the column-label header but drop IOUtil's creation date, hostname, and
+# absolute parameter-file path (see unit-selftest.par).
+IO::out_fileinfo = "axis labels"
+
+CarpetX::out_metadata = no
+
+# The golden data: the per-packet identity table, the per-packet state
+# table, and the five-channel ledger-closure verdict table, one file per
+# iteration.
+CarpetX::out_tsv_vars = "
+    MCNuX::mcnux_packet_diag
+    MCNuX::mcnux_emission_diag
+    MCNuX::mcnux_ledger_diag
+"

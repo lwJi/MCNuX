@@ -239,7 +239,7 @@ gate results. Statistical checks output their standardized deviations as numeric
   |---|---|---|
   | `unit-selftest` | Minkowski, no transport; `MCNuX::run_selftests = yes` runs the self-test battery at initial time and writes one row per named check (measured error, pass flag) as TSV | the battery of [MCNX-VER-08]'s matrix: RNG KAT vectors and [0,1) closed forms, conversion-factor recomputation and round-trips, νx mapping and relabeling identities, monotonicity tripwire, tetrad/null identities, Tmunu closed forms, sign fixtures, range-policy fixtures, inversion-protocol fixtures, `sizeof(amrex::Real) == 8` |
   | `minkowski-freestream` | Minkowski, pinned initial packets, zero opacities | straight lines at `\|dx/dt\| = 1`, `p_i` constant to machine tier per step, flat-spacetime exactness of [geodesic-propagation](./geodesic-propagation.md) [MCNX-GEO-04] |
-  | `schwarzschild-pt` | `TestMCNuX` `"Schwarzschild"` (M = 1), domain in `r > M/2`, no interactions; pinned trajectory family at isotropic `r ∈ [6M, 10M]`, integrated for `T = 100M` at resolution `h = M/16`; per-packet `p_t` written as TSV | `p_t` drift `\|p_t(T) − p_t(0)\|/\|p_t(0)\| ≤ 1e-5` for every trajectory at the pinned resolution (design bound — see Open questions); companion legs at `Δt, Δt/2, Δt/4` show convergence order ≥ 2 of the drift ([MCNX-GEO-04], [MCNX-GEO-05]) |
+  | `schwarzschild-pt` | `TestMCNuX` `"Schwarzschild"` (M = 1), fixed 32³ grid on `[2, 130]³` (`dx = 4M`, entirely in `r > M/2`), no interactions; pinned 8-packet fixture at isotropic `r ∈ [6M, 10M]`, integrated for `T = 100M`; three legs at `Δt = M/4, M/8, M/16` (re-pinned at golden capture from the original `h = M/16` base — see Open questions), harness tests `schwarzschild-pt`/`-dt2`/`-dt4` with golden `mcnux_packet_diag` TSVs; per-packet `p_t` written as TSV | `p_t` drift `\|p_t(T) − p_t(0)\|/\|p_t(0)\| ≤ 1e-5` for every trajectory at the base leg `Δt = M/4` (design bound — see Open questions; measured ≤ 6.9e-11, ~5 orders of margin); the three legs show convergence order ≥ 2 of the drift — the order requirement is never re-pinnable (measured: every per-packet order ≥ 2.88, max-norm orders 3.98/4.02) ([MCNX-GEO-04], [MCNX-GEO-05]) |
   | `emission-fixedseed` | equilibration box, analytic mode, one emission-only step | exact packet set (ids, states) golden; bin-center energies; count law; creation draw-map audit ([packet-representation-and-sampling](./packet-representation-and-sampling.md) [MCNX-PKT-05]) |
   | `interactions-fixedseed` | uniform sphere, analytic mode, pinned small population, several steps; per-packet event log written as TSV | episode structure and draw-map audits ([MCNX-INT-06]; the constant five-draw diffusion audit of [MCNX-TRP-07]), the diffusion leg (prelude handoff and regime decision on Δt′_rem per [MCNX-TRP-06], causal cap, two-leg position update), discreteness, elasticity identities, id retirement, ledger closure per step |
   | `ownership-multibox` | Minkowski, ≥ 2 boxes per rank, packets crossing box boundaries | after-step ownership invariant, bounded-motion audit, one-invocation-per-(patch, level) scheduling counter ([MCNX-GPU-05], [MCNX-GPU-06], [MCNX-CTX-03]) |
@@ -361,7 +361,7 @@ names: benchmarks per [MCNX-VER-06]/[MCNX-VER-07]; `selftest:` legs of
 | [MCNX-GEO-02] | selftest: null-closure identity `α²(p^t)² = γ^{ij} p_i p_j`; schwarzschild-pt |
 | [MCNX-GEO-03] | selftest: linear-field gather exactness (values and derivatives) |
 | [MCNX-GEO-04] | minkowski-freestream (flat exactness); schwarzschild-pt Δt-convergence legs (order ≥ 2) |
-| [MCNX-GEO-05] | schwarzschild-pt (`p_t` drift ≤ 1e-5 at pinned resolution; convergent at order ≥ 2) |
+| [MCNX-GEO-05] | schwarzschild-pt (`p_t` drift ≤ 1e-5 at base `Δt = M/4`, measured ≤ 6.9e-11; convergent at order ≥ 2 across the `M/4, M/8, M/16` legs) |
 | [MCNX-INT-01] | stats-beam (`exp(−κ_a L)`); interactions-fixedseed (episode kinematics audit) |
 | [MCNX-INT-02] | interactions-fixedseed (episode/competition audit); stats-scatterbox (Poisson counts) |
 | [MCNX-INT-03] | interactions-fixedseed (discreteness: weights never change, whole-packet removal); stats-beam |
@@ -468,13 +468,26 @@ Correctness requirements section.
   `ADMBaseX::initial_data = "Brill-Lindquist"`). This spec relies on that mechanism;
   if it regressed in the flesh, `TestMCNuX` would need a fallback (own keyword +
   `"none"` base values), which would be a spec change here.
-- **Assumption: the `schwarzschild-pt` drift bound is a design bound.** The
-  `1e-5`-relative bound at the pinned resolution (`h = M/16`, `T = 100M`,
-  `r ∈ [6M, 10M]`) is set from the expected error budget of an order-≥ 2 integrator on
-  a trilinear-gathered analytic metric; the binding, resolution-independent
-  requirements are the convergence order and the golden parity. If golden-data
-  creation measures a convergent drift above the bound, the pinned resolution (never
-  the order requirement) is re-pinned with the measurement documented here.
+- **Assumption (re-pin executed at golden capture): the `schwarzschild-pt` drift
+  bound is a design bound; the legs are `Δt = M/4, M/8, M/16`.** The `1e-5`-relative
+  bound (now at base `h = M/4`, `T = 100M`, `r ∈ [6M, 10M]`) is set from the expected
+  error budget of an order-≥ 2 integrator on a trilinear-gathered analytic metric; the
+  binding, resolution-independent requirements are the convergence order and the
+  golden parity, and the resolution (never the order requirement) may be re-pinned
+  with the measurement documented here. That re-pin has now happened, in the opposite
+  direction from the one anticipated: with the face-aware substepped production push
+  landing cell-face crossings exactly on faces, the measured drift at the original
+  `M/16, M/32, M/64` legs sits at the double-precision accumulation floor
+  (`~1e-15` over thousands of steps; base-leg drift `1e-14..3e-13`), so successive
+  drift ratios are roundoff noise and the order-≥ 2 acceptance is unmeasurable there.
+  The legs were re-pinned to `Δt = M/4, M/8, M/16` — same `T = 100M`, same fixed 32³
+  grid on `[2, 130]³` (`dx = 4M`), same 8-packet fixture, keeping the original `M/16`
+  leg as the finest — restoring the asymptotic regime: measured per-packet orders
+  ≥ 2.88, max-norm orders 3.98/4.02, base-leg drift ≤ 6.9e-11 (the 1e-5 design bound
+  holds with ~5 orders of margin). Measurement recorded in
+  `.build/schwarzschild-pt/build.md` and the `MCNuX/test/schwarzschild-pt.par` header;
+  the captured golden `mcnux_packet_diag` TSVs of
+  `schwarzschild-pt`/`-dt2`/`-dt4` freeze these legs per Implementation freedom.
 - **Assumption: statistical golden data is seed-frozen.** The z-score reduction of
   [MCNX-VER-07] deliberately freezes each statistical check at the primary seed; the
   secondary seed `20260730` exists for non-golden robustness cross-checks. A false

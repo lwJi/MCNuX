@@ -48,7 +48,7 @@ CCTK_INT mcnux_transport_diag TYPE=SCALAR
 # Not checkpointed: the battery is recomputed from nothing but code, so it is
 # not part of any evolved state.
 
-CCTK_REAL mcnux_selftest TYPE=ARRAY DIM=1 SIZE=150 DISTRIB=CONSTANT TAGS='checkpoint="no"'
+CCTK_REAL mcnux_selftest TYPE=ARRAY DIM=1 SIZE=162 DISTRIB=CONSTANT TAGS='checkpoint="no"'
 {
   selftest_error
   selftest_pass
@@ -71,6 +71,28 @@ CCTK_REAL mcnux_packet_diag TYPE=ARRAY DIM=1 SIZE=8 DISTRIB=CONSTANT TAGS='check
 {
   pk_x pk_y pk_z pk_px pk_py pk_pz pk_pt
 } "MCNuX synthetic packet diagnostics (position, lower momentum, covariant energy per fixture packet)"
+
+# Per-packet emission-identity diagnostic table
+# (specs/packet-representation-and-sampling.md [MCNX-PKT-01/02/03/05]; the
+# `emission-fixedseed` benchmark of specs/verification-suite-design.md:243,
+# "exact packet set (ids, states) golden"). Sibling of mcnux_packet_diag:
+# the discrete half of the created packet state — AMReX id, weight
+# N = E_p/nu, species index (0 nu_e, 1 nu_e_bar, 2 nu_x), and the RNG event
+# counter e — all integers or exact binary fractions stored exactly in
+# binary64. Same row keying as mcnux_packet_diag: row = packet id - 1
+# (independent of tile and iteration order), zero rows for unissued ids, and
+# the same SIZE-cap discipline: a packet id above SIZE is a hard CCTK_VERROR
+# (the id budget of the benchmark tuning, never a silent truncation). SIZE
+# is cross-checked at runtime against the fill routine's bound. A SEPARATE
+# group (not extra mcnux_packet_diag columns) so every existing benchmark's
+# per-group golden TSVs stay byte-stable. Storage is parameter-gated
+# (schedule.ccl); not checkpointed: recomputed from the population every
+# fill.
+
+CCTK_REAL mcnux_emission_diag TYPE=ARRAY DIM=1 SIZE=8 DISTRIB=CONSTANT TAGS='checkpoint="no"'
+{
+  em_id em_w em_species em_ec
+} "MCNuX per-packet emission identity diagnostics (AMReX id, weight, species index, event counter per created packet)"
 
 # Per-packet fluid-gather diagnostic table
 # (specs/neutrino-matter-interactions.md [MCNX-INT-05] and its inputs table:
@@ -106,6 +128,47 @@ CCTK_REAL mcnux_ledger_diag TYPE=ARRAY DIM=1 SIZE=5 DISTRIB=CONSTANT TAGS='check
 {
   lg_grid_total lg_event_net lg_gross lg_residual lg_pass
 } "MCNuX conservation-ledger closure diagnostics (grid total, event net, gross activity, residual, pass per channel P^t, P_x, P_y, P_z, L)"
+
+# Statistical-check verdict table of specs/verification-suite-design.md
+# [MCNX-VER-07] (the binding per-check output shape: estimate, expected value,
+# standard error sigma, and z = (estimate - expected)/sigma) — the output of
+# the stats-tier writers, first consumer MCNuX_StatsEmission (the
+# `stats-emission` benchmark, [MCNX-PKT-06]). One row per check; the
+# stats-emission row layout (4 rows per species in species_index order:
+# count, energy, cos(theta) mean, phi mean; then the two RNG uniformity rows)
+# is owned by, and documented in, src/mcnux_emission.cxx, which cross-checks
+# SIZE against its own row count at runtime. Acceptance |z| <= 4 is judged
+# once at golden capture; thereafter the archived z values are golden numbers
+# diffed at 1e-12. Same shape idiom as mcnux_ledger_diag; storage is
+# parameter-gated (schedule.ccl); not checkpointed: the table is recomputed
+# from the per-step accumulator every fill.
+
+CCTK_REAL mcnux_stats_diag TYPE=ARRAY DIM=1 SIZE=14 DISTRIB=CONSTANT TAGS='checkpoint="no"'
+{
+  stats_estimate stats_expected stats_sigma stats_z
+} "MCNuX statistical-check verdicts (estimate, expected, standard error, standardized deviation z per check)"
+
+# Per-species escape-tally diagnostic table
+# (specs/particle-container-and-gpu.md [MCNX-GPU-05]: packets that leave the
+# outer domain boundary are removed and TALLIED as escapes, never silently
+# dropped; the `escape-freestream` benchmark). Species-major layout, row =
+# escape_slot(species, channel) = 3 * species + channel of
+# src/mcnux_escape.hxx: 3 species (0 nu_e, 1 nu_e_bar, 2 nu_x) x
+# {escaped-packet count, escaped number Sum N, escaped energy Sum N p^t with
+# p^t the upper-index null-closure energy on the last-in-domain metric — the
+# ledger energy convention, NOT the covariant pk_pt column}. The values are
+# the RUN-CUMULATIVE totals of the TU-owned accumulator behind
+# escape_run_tally() (mcnux_escape.cxx), mirrored each transport step;
+# detection/tally/removal at the push and episode-driver sites is ALWAYS ON —
+# only this table is parameter-gated (schedule.ccl, test_escape_tallies).
+# SIZE is cross-checked at runtime against escape_num_slots. Not
+# checkpointed (the mcnux_*_diag convention); the accumulator's restart
+# persistence is a recorded deferred limitation (src/mcnux_escape.hxx).
+
+CCTK_REAL mcnux_escape_diag TYPE=ARRAY DIM=1 SIZE=9 DISTRIB=CONSTANT TAGS='checkpoint="no"'
+{
+  esc_tally
+} "MCNuX run-cumulative per-species escape tallies (packet count, number, energy per species, species-major)"
 
 # MCNuX-owned source-term grid variables of
 # specs/hydro-coupling-source-terms.md [MCNX-HYD-01] — the published coupling

@@ -68,6 +68,35 @@ extern "C" void MCNuX_ParamCheck(CCTK_ARGUMENTS) {
         "([MCNX-HYD-05], specs/hydro-coupling-source-terms.md:177-188). "
         "Disable one of the two contributors, or turn the closure audit "
         "off.");
+  // The same auditability guard for the episode driver: its scattering and
+  // absorption deposits also normalize with the grid's cell volume times the
+  // run's dt, so mixing it with the synthetic fixture's 0.5 pair under the
+  // closure is equally un-auditable.
+  if (test_ledger_closure && test_synthetic_deposit && enable_interactions)
+    CCTK_VERROR(
+        "MCNuX::test_ledger_closure = yes cannot audit a run with BOTH "
+        "MCNuX::test_synthetic_deposit = yes AND MCNuX::enable_interactions = "
+        "yes: the two contributors deposit with different dV*dt "
+        "normalization pairs (the fixture's synthetic constants vs the "
+        "grid's cell volume times the run's dt) into the same source-term "
+        "sum, so no single grid-side multiplier closes the ledger "
+        "([MCNX-HYD-05], specs/hydro-coupling-source-terms.md:177-188). "
+        "Disable one of the two contributors, or turn the closure audit "
+        "off.");
+
+  // Statistical-reduction writer guard ([MCNX-VER-07]): the stats-emission
+  // rows reduce the emission step, so without the emission loop there is
+  // nothing to reduce and every packet row would abort on its zero-count
+  // guard at the first transport step.
+  if (test_stats_emission && !enable_emission)
+    CCTK_VERROR(
+        "MCNuX::test_stats_emission = yes requires MCNuX::enable_emission = "
+        "yes: the statistical-reduction writer MCNuX_StatsEmission reduces "
+        "the production emission step ([MCNX-PKT-06]/[MCNX-VER-07], the "
+        "`stats-emission` benchmark of "
+        "specs/verification-suite-design.md:255-279); without the emission "
+        "loop there is no step to reduce. Enable emission, or turn the "
+        "statistical writer off.");
 
   if (enable_emission && test_synthetic_packets)
     CCTK_VERROR(

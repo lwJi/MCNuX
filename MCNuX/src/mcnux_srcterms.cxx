@@ -200,17 +200,20 @@ double sum_group_component(const int gi, const int comp) {
 // with the grid side reduced from the deposited MCNuX::rad_force /
 // MCNuX::lepton_source variables and the event side independently rebuilt
 // from pre-negation packet deltas — never the deposited SourceContribution,
-// which would trivially self-cancel. Two event-side contributors are folded:
-// the shared synthfix LedgerDelta list (only with test_synthetic_deposit,
-// matching the contributor's own gate) and the per-step emission audit
-// emission_step_audit() (always — it is zero unless MCNuX_Emission ran this
-// step). The grid-side multiplier must be the deposit's OWN dV*dt pairing
-// ([MCNX-HYD-02]): the fixture's synthfix::dV * synthfix::dt = 0.5 in
-// synthetic-deposit mode, and the real coordinate cell volume times
-// cctk_delta_time otherwise (the pair MCNuX_Emission deposits with).
-// MCNuX_ParamCheck forbids mixing the two contributors under this closure —
-// they normalize with different dV*dt, so no single scalar multiplier could
-// close the shared grid sum. The verdict table is mirrored into
+// which would trivially self-cancel. Three event-side contributors are
+// folded: the shared synthfix LedgerDelta list (only with
+// test_synthetic_deposit, matching the contributor's own gate), the per-step
+// emission audit emission_step_audit(), and the per-step interaction audit
+// interaction_step_audit() (both always — each is zero unless its owner,
+// MCNuX_Emission or MCNuX_EpisodeDriver, ran this step). The grid-side
+// multiplier must be the deposit's OWN dV*dt pairing ([MCNX-HYD-02]): the
+// fixture's synthfix::dV * synthfix::dt = 0.5 in synthetic-deposit mode, and
+// the real coordinate cell volume times cctk_delta_time otherwise (the pair
+// MCNuX_Emission and MCNuX_EpisodeDriver both deposit with).
+// MCNuX_ParamCheck forbids mixing the synthetic fixture with either real
+// contributor under this closure — they normalize with different dV*dt, so
+// no single scalar multiplier could close the shared grid sum. The verdict
+// table is mirrored into
 // MCNuX::mcnux_ledger_diag (one row per channel) for golden output; any
 // failing channel additionally aborts the run so a regression is loud even
 // without a golden diff.
@@ -238,6 +241,13 @@ extern "C" void MCNuX_LedgerClosure(CCTK_ARGUMENTS) {
   // it is zero-initialized and only MCNuX_Emission writes it, so this is a
   // provable no-op on the AT initial leg and in emission-free runs.
   audit.accumulate(emission_step_audit());
+  // Event side, contributor 3: the episode driver's per-step audit
+  // (scattering + absorption events, mcnux_interactions.cxx). Folded
+  // unconditionally for the same reason: zero-initialized, written only by
+  // MCNuX_EpisodeDriver (which runs BEFORE MCNuX_AddToSourceTerms, hence
+  // before this closure), so this is a provable no-op on the AT initial leg
+  // and in interaction-free runs.
+  audit.accumulate(interaction_step_audit());
 
   // Grid side: Sum_cells (source value) * dV * dt per channel, with the
   // deposit's own dV*dt pairing (mode-dependent, see the routine comment).

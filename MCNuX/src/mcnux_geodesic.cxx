@@ -23,10 +23,13 @@
 // the packet population and of the fill_packet_diag definition.
 #include "mcnux_gather.hxx"
 
+#include "mcnux_escape.hxx"
 #include "mcnux_fluid.hxx"
 #include "mcnux_geodesic.hxx"
 #include "mcnux_particles.hxx"
 #include "mcnux_tetrad.hxx"
+
+#include <AMReX_GpuAtomic.H>
 
 #include <AMReX_AmrParGDB.H> // completes AmrParGDB for the ParGDBBase* ctor
 #include <AMReX_GpuContainers.H>
@@ -176,15 +179,24 @@ void fill_packet_diag(const MetricGroups &groups, const PacketDiagColumns &cols,
 // Synthetic packet fixture
 // ---------------------------------------------------------------------------
 
-// The deterministic seed set of the `minkowski-freestream` benchmark (and of
-// T16's Schwarzschild legs): eight packets with exact binary-fraction
-// positions inside |x^i| <= 0.25 and momenta spanning the six axis
-// directions (at four different magnitudes — the coordinate speed must be 1
-// regardless) plus two oblique directions. Over the benchmark's 4 x 0.125
-// coordinate time every packet stays well inside the [-1, 1]^3 domain, so
-// the escape policy is never exercised. Row index in the diagnostic table =
-// packet id - 1 = fixture index. Function-local constexpr (the
-// mcnux_srcterms.cxx CUDA note on namespace-scope struct constants).
+// Two deterministic seed sets, selected by MCNuX::synthetic_packet_fixture
+// (exact binary fractions in both; row index in the diagnostic table =
+// packet id - 1 = fixture index; function-local constexpr per the
+// mcnux_srcterms.cxx CUDA note on namespace-scope struct constants):
+//   * "minkowski" (the `minkowski-freestream` benchmark): eight packets
+//     inside |x^i| <= 0.25 with momenta spanning the six axis directions
+//     (at four different magnitudes — the coordinate speed must be 1
+//     regardless) plus two oblique directions; over the benchmark's
+//     4 x 0.125 coordinate time every packet stays well inside the
+//     [-1, 1]^3 domain, so the escape policy is never exercised. The
+//     `escape-freestream` benchmark reuses the SAME fixture over 8 steps,
+//     where seven of the eight packets exit and the [MCNX-GPU-05] escape
+//     tally IS the observable.
+//   * "schwarzschild" (the `schwarzschild-pt` p_t-drift legs): eight
+//     packets at isotropic r in [6.06, 9.53] M with dominant
+//     outgoing-radial momenta; over the benchmark's T = 100 M none escapes
+//     the [2, 130]^3 domain (final radii ~100-105 with every coordinate
+//     inside the box, measured at capture).
 namespace {
 
 struct PacketFixture {
@@ -199,7 +211,7 @@ extern "C" void MCNuX_SeedSyntheticPackets(CCTK_ARGUMENTS) {
   DECLARE_CCTK_PARAMETERS;
 
   constexpr int nfixture = 8;
-  constexpr PacketFixture fixture[nfixture] = {
+  constexpr PacketFixture fixture_minkowski[nfixture] = {
       {0.125, 0.0, 0.0, 1.0, 0.0, 0.0},
       {-0.125, 0.0, 0.0, -1.0, 0.0, 0.0},
       {0.0, 0.125, 0.0, 0.0, 2.0, 0.0},
@@ -209,6 +221,20 @@ extern "C" void MCNuX_SeedSyntheticPackets(CCTK_ARGUMENTS) {
       {0.25, -0.25, 0.125, 0.5, -0.25, 0.125},
       {-0.0625, 0.1875, -0.25, -0.375, 0.75, 0.5},
   };
+  constexpr PacketFixture fixture_schwarzschild[nfixture] = {
+      {3.5, 3.5, 3.5, 1.0, 1.0, 1.0},
+      {4.5, 4.5, 4.5, 0.5, 0.5, 0.5},
+      {5.5, 5.5, 5.5, 2.0, 2.0, 2.0},
+      {6.0, 4.0, 3.0, 1.5, 1.0, 0.75},
+      {8.0, 3.0, 3.0, 1.0, 0.5, 0.25},
+      {4.0, 6.0, 3.0, 0.5, 1.5, 0.5},
+      {3.0, 4.0, 7.0, 0.25, 0.5, 1.0},
+      {5.0, 5.0, 2.5, 1.0, 1.0, 0.5},
+  };
+  const PacketFixture *const fixture =
+      CCTK_EQUALS(synthetic_packet_fixture, "schwarzschild")
+          ? fixture_schwarzschild
+          : fixture_minkowski;
 
   const int nrows = packet_diag_size();
   if (nrows != nfixture)
@@ -264,19 +290,40 @@ extern "C" void MCNuX_SeedSyntheticPackets(CCTK_ARGUMENTS) {
 // ---------------------------------------------------------------------------
 
 // One transport step of free streaming for every packet: per tile, one
-// device kernel applying geodesic_step (RK4 on the [MCNX-GEO-01] RHS with
-// the trilinear gather of [MCNX-GEO-03]) over the coarsest-level Delta t
-// (cctk_delta_time in level/global mode, the cadence contract of
-// mcnux_cadence.cxx). Afterwards a plain Redistribute() re-establishes
-// ownership (packets that left the domain are dropped by AMReX; escape
-// tallies are a later task's, as is the bounded/local redistribution of
-// specs/particle-container-and-gpu.md — T23 refines this call).
+// device kernel applying geodesic_step_cellwise (RK4 on the [MCNX-GEO-01]
+// RHS with the trilinear gather of [MCNX-GEO-03], sub-stepped at cell-face
+// crossings so every RK4 piece integrates one smooth trilinear polynomial —
+// see mcnux_geodesic.hxx) over the coarsest-level Delta t (cctk_delta_time
+// in level/global mode, the cadence contract of mcnux_cadence.cxx).
+//
+// Escape handling ([MCNX-GPU-05], mcnux_escape.hxx): a packet whose
+// post-step position satisfies the half-open outside_domain predicate is
+// tallied per species (count, number Sum N, energy Sum N p^t — p^t the
+// upper-index null closure with the FINAL momentum on the metric gathered
+// at the PRE-step, last-in-domain position) into one step-scoped device
+// buffer shared by every tile's kernel, then removed explicitly via
+// make_invalid (the absorption idiom of mcnux_interactions.cxx; the id
+// value stays retired, [MCNX-GPU-04]) — tally strictly BEFORE
+// invalidation, so nothing is ever silently dropped inside Redistribute().
+// The unconditional per-patch Redistribute() afterwards compacts the
+// invalidated slots and re-establishes ownership ([MCNX-GPU-06] ordering;
+// the bounded/local redistribution of specs/particle-container-and-gpu.md
+// remains a later refinement of that call). The fill_packet_diag after it
+// zeroes then refills the golden table from LIVE packets only, so an
+// escaped packet's row flipping to all-zero is the built-in
+// discrete-removal observable (the `escape-freestream` benchmark).
 extern "C" void MCNuX_GeodesicPush(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTS_MCNuX_GeodesicPush;
   DECLARE_CCTK_PARAMETERS;
 
   const MetricGroups groups = metric_groups();
   const double dt = cctk_delta_time;
+
+  // ONE step-scoped escape buffer, captured by raw pointer into every
+  // tile's kernel (the mcnux_emission.cxx device-accumulator scope
+  // precedent; per-tile buffers would lose counts across tiles).
+  amrex::Gpu::DeviceVector<double> esc_dev(escape_num_slots, 0.0);
+  double *const esc_ptr = esc_dev.data();
 
   for_each_packet_tile(groups, [&](PacketContainer &, int, const PacketIter &pti,
                                    const VertexMetricGather gather) {
@@ -287,7 +334,24 @@ extern "C" void MCNuX_GeodesicPush(CCTK_ARGUMENTS) {
                      ptd.rdata(PIdx::z)[ip]};
       double p[3] = {ptd.rdata(PIdx::px)[ip], ptd.rdata(PIdx::py)[ip],
                      ptd.rdata(PIdx::pz)[ip]};
-      geodesic_step(gather, x, p, dt);
+      // Pre-step position: the last-in-domain metric anchor of the escape
+      // energy tally (mcnux_escape.hxx convention).
+      const double x0[3] = {x[0], x[1], x[2]};
+      geodesic_step_cellwise(gather, x, p, dt);
+      if (outside_domain(x, gather.prob_lo, gather.prob_hi)) {
+        const MetricSnapshot m = gather(x0[0], x0[1], x0[2]);
+        const InverseSpatialMetric gu = spatial_metric_inverse(m.g);
+        const double pt_up = p_t_closure(p[0], p[1], p[2], gu, m.alpha);
+        const int sidx = ptd.idata(IntIdx::species)[ip];
+        const double N = ptd.rdata(PIdx::w)[ip];
+        amrex::Gpu::Atomic::AddNoRet(
+            &esc_ptr[escape_slot(sidx, escape_channel_count)], 1.0);
+        amrex::Gpu::Atomic::AddNoRet(
+            &esc_ptr[escape_slot(sidx, escape_channel_number)], N);
+        amrex::Gpu::Atomic::AddNoRet(
+            &esc_ptr[escape_slot(sidx, escape_channel_energy)], N * pt_up);
+        amrex::particle_impl::make_invalid(ptd.m_idcpu[ip]);
+      }
       ptd.rdata(PIdx::x)[ip] = x[0];
       ptd.rdata(PIdx::y)[ip] = x[1];
       ptd.rdata(PIdx::z)[ip] = x[2];
@@ -300,6 +364,15 @@ extern "C" void MCNuX_GeodesicPush(CCTK_ARGUMENTS) {
 
   for (int patch = 0; patch < num_packet_patches(); ++patch)
     packet_population(patch).Redistribute();
+
+  // Fold the step's escapes into the run-cumulative tally (per-step +=,
+  // never reset; surfaced by MCNuX_EscapeDiag when gated on).
+  {
+    std::vector<double> esc_host(escape_num_slots, 0.0);
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost, esc_dev.begin(), esc_dev.end(),
+                     esc_host.begin());
+    escape_run_tally().add_slots(esc_host.data());
+  }
 
   fill_packet_diag(groups, {pk_x, pk_y, pk_z, pk_px, pk_py, pk_pz, pk_pt},
                    packet_diag_size());

@@ -240,6 +240,39 @@ if (test_id_contract)
   } "Assert the [MCNX-GPU-04] packet id contract (uniqueness, range, bit 63, no retired-id reuse)"
 }
 
+# Escape-tally diagnostic of specs/particle-container-and-gpu.md
+# [MCNX-GPU-05] (parameter-gated by MCNuX::test_escape_tallies; the
+# `escape-freestream` benchmark): mirror the run-cumulative per-species
+# escape tallies (fed always-on by the push/episode-driver escape sites)
+# into the MCNuX::mcnux_escape_diag table. The AT initial leg writes the
+# zero baseline (no transport has run; the accumulator is zero-initialized);
+# the in-step leg runs AFTER MCNuX_AddToSourceTerms (the MCNuX_LedgerClosure
+# block shape), i.e. after every position-changing routine of the step has
+# folded its escapes. Global mode: one mirror per transport step
+# ([MCNX-CTX-03]); the self pair on the table is the complete grid-variable
+# footprint ([MCNX-CTX-04]; the accumulator is TU-local state in
+# mcnux_escape.cxx, not a grid variable).
+
+if (test_escape_tallies)
+{
+  STORAGE: mcnux_escape_diag
+
+  SCHEDULE MCNuX_EscapeDiag AT initial
+  {
+    LANG: C
+    OPTIONS: global
+    WRITES: MCNuX::mcnux_escape_diag(everywhere)
+  } "Fill the escape-tally diagnostic table (initial data: zero baseline)"
+
+  SCHEDULE MCNuX_EscapeDiag IN MCNuX_TransportStep AFTER MCNuX_AddToSourceTerms
+  {
+    LANG: C
+    OPTIONS: global
+    READS: MCNuX::mcnux_escape_diag(everywhere)
+    WRITES: MCNuX::mcnux_escape_diag(everywhere)
+  } "Mirror the run-cumulative per-species escape tallies into the diagnostic table"
+}
+
 # Fluid-state/four-velocity gather diagnostic of
 # specs/neutrino-matter-interactions.md ([MCNX-INT-05]: cell-centered fluid
 # state of the packet's containing cell, direct one-cell read; inputs table:
@@ -344,7 +377,7 @@ if (enable_emission)
 
 if (enable_emission && test_emission)
 {
-  STORAGE: mcnux_packet_diag
+  STORAGE: mcnux_packet_diag mcnux_emission_diag
 
   SCHEDULE MCNuX_EmissionDiag AT initial AFTER ODESolvers_Initial
   {
@@ -354,7 +387,8 @@ if (enable_emission && test_emission)
     READS: ADMBaseX::lapse(everywhere)
     READS: ADMBaseX::shift(everywhere)
     WRITES: MCNuX::mcnux_packet_diag(everywhere)
-  } "Fill the per-packet diagnostic table (initial data: empty population)"
+    WRITES: MCNuX::mcnux_emission_diag(everywhere)
+  } "Fill the per-packet diagnostic tables (initial data: empty population)"
 
   SCHEDULE MCNuX_EmissionDiag IN MCNuX_AddToSourceTerms AFTER MCNuX_Emission
   {
@@ -365,7 +399,43 @@ if (enable_emission && test_emission)
     READS: ADMBaseX::shift(everywhere)
     READS: MCNuX::mcnux_packet_diag(everywhere)
     WRITES: MCNuX::mcnux_packet_diag(everywhere)
-  } "Mirror the emitted packet population into the diagnostic table"
+    READS: MCNuX::mcnux_emission_diag(everywhere)
+    WRITES: MCNuX::mcnux_emission_diag(everywhere)
+  } "Mirror the emitted packet population into the diagnostic tables"
+}
+
+# Statistical-reduction writer of specs/verification-suite-design.md
+# [MCNX-VER-07] / specs/packet-representation-and-sampling.md [MCNX-PKT-06]
+# (parameter-gated by MCNuX::test_stats_emission; the `stats-emission`
+# benchmark): reduce the emission step's accumulator into per-check
+# (estimate, expected, sigma, z) rows in the MCNuX::mcnux_stats_diag table.
+# The AT initial leg defines iteration-0 output (packet rows zero-filled —
+# no emission has run — RNG uniformity rows computed); the in-step leg runs
+# in the same-group AFTER-Emission slot (the MCNuX_EmissionDiag precedent),
+# so the step's accumulator is complete when read. Modes mirror the
+# EmissionDiag pair ([MCNX-CTX-03]); the routine reads no grid functions —
+# the self pair on the verdict table is its complete grid-variable footprint
+# ([MCNX-CTX-04]; the accumulator is TU-local state in mcnux_emission.cxx,
+# not a grid variable).
+
+if (test_stats_emission)
+{
+  STORAGE: mcnux_stats_diag
+
+  SCHEDULE MCNuX_StatsEmission AT initial AFTER ODESolvers_Initial
+  {
+    LANG: C
+    OPTIONS: global
+    WRITES: MCNuX::mcnux_stats_diag(everywhere)
+  } "Fill the statistical-check verdict table (initial data: zero packet rows, RNG uniformity rows)"
+
+  SCHEDULE MCNuX_StatsEmission IN MCNuX_AddToSourceTerms AFTER MCNuX_Emission
+  {
+    LANG: C
+    OPTIONS: level
+    READS: MCNuX::mcnux_stats_diag(everywhere)
+    WRITES: MCNuX::mcnux_stats_diag(everywhere)
+  } "Reduce the emission step into (estimate, expected, sigma, z) statistical check rows"
 }
 
 # The synthetic-event contributor (verification scaffolding, parameter-gated):
@@ -393,10 +463,13 @@ if (test_synthetic_deposit)
 # deposited variables through the driver's MultiFabs, valid cells only) and
 # the event-side packet total rebuilt independently from the active
 # contributors' pre-negation LedgerDelta records: the shared synthetic list
-# (with test_synthetic_deposit) and the emission loop's per-step audit
+# (with test_synthetic_deposit), the emission loop's per-step audit
 # emission_step_audit() (with enable_emission — populated by MCNuX_Emission
-# IN MCNuX_AddToSourceTerms, which this routine is ordered after, so the
-# audit is complete when read). Global mode: one verdict per transport step, the routine
+# IN MCNuX_AddToSourceTerms, which this routine is ordered after), and the
+# episode driver's per-step audit interaction_step_audit() (with
+# enable_interactions — populated by MCNuX_EpisodeDriver, which runs BEFORE
+# MCNuX_AddToSourceTerms), so both audits are complete when read. Global
+# mode: one verdict per transport step, the routine
 # walks the patches/levels itself ([MCNX-CTX-03]); the READS: on the source
 # groups and the WRITES: on the verdict table are the complete grid-variable
 # footprint ([MCNX-CTX-04]). The AT initial leg audits the all-zero state
