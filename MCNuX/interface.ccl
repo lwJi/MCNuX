@@ -48,7 +48,7 @@ CCTK_INT mcnux_transport_diag TYPE=SCALAR
 # Not checkpointed: the battery is recomputed from nothing but code, so it is
 # not part of any evolved state.
 
-CCTK_REAL mcnux_selftest TYPE=ARRAY DIM=1 SIZE=156 DISTRIB=CONSTANT TAGS='checkpoint="no"'
+CCTK_REAL mcnux_selftest TYPE=ARRAY DIM=1 SIZE=162 DISTRIB=CONSTANT TAGS='checkpoint="no"'
 {
   selftest_error
   selftest_pass
@@ -147,6 +147,28 @@ CCTK_REAL mcnux_stats_diag TYPE=ARRAY DIM=1 SIZE=14 DISTRIB=CONSTANT TAGS='check
 {
   stats_estimate stats_expected stats_sigma stats_z
 } "MCNuX statistical-check verdicts (estimate, expected, standard error, standardized deviation z per check)"
+
+# Per-species escape-tally diagnostic table
+# (specs/particle-container-and-gpu.md [MCNX-GPU-05]: packets that leave the
+# outer domain boundary are removed and TALLIED as escapes, never silently
+# dropped; the `escape-freestream` benchmark). Species-major layout, row =
+# escape_slot(species, channel) = 3 * species + channel of
+# src/mcnux_escape.hxx: 3 species (0 nu_e, 1 nu_e_bar, 2 nu_x) x
+# {escaped-packet count, escaped number Sum N, escaped energy Sum N p^t with
+# p^t the upper-index null-closure energy on the last-in-domain metric — the
+# ledger energy convention, NOT the covariant pk_pt column}. The values are
+# the RUN-CUMULATIVE totals of the TU-owned accumulator behind
+# escape_run_tally() (mcnux_escape.cxx), mirrored each transport step;
+# detection/tally/removal at the push and episode-driver sites is ALWAYS ON —
+# only this table is parameter-gated (schedule.ccl, test_escape_tallies).
+# SIZE is cross-checked at runtime against escape_num_slots. Not
+# checkpointed (the mcnux_*_diag convention); the accumulator's restart
+# persistence is a recorded deferred limitation (src/mcnux_escape.hxx).
+
+CCTK_REAL mcnux_escape_diag TYPE=ARRAY DIM=1 SIZE=9 DISTRIB=CONSTANT TAGS='checkpoint="no"'
+{
+  esc_tally
+} "MCNuX run-cumulative per-species escape tallies (packet count, number, energy per species, species-major)"
 
 # MCNuX-owned source-term grid variables of
 # specs/hydro-coupling-source-terms.md [MCNX-HYD-01] — the published coupling

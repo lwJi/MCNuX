@@ -449,7 +449,12 @@ extern "C" void MCNuX_Emission(CCTK_ARGUMENTS) {
   }
 
   // Creation writes into the owning cell's own tile; Redistribute() is the
-  // no-op ownership guard (the push precedent).
+  // no-op ownership guard (the push precedent). Unlike the push/episode
+  // Redistribute() sites this one is PROVABLY never an escape site
+  // ([MCNX-GPU-05], mcnux_escape.hxx): creation_position maps u through
+  // map_uniform_to_interval into the walked cell's own half-open
+  // [cell_lo, cell_lo + dx) interval (mcnux_emission.hxx), so every created
+  // packet starts strictly inside the domain — no escape detection here.
   for (int patch = 0; patch < num_packet_patches(); ++patch)
     packet_population(patch).Redistribute();
 

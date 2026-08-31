@@ -243,6 +243,10 @@ struct VertexMetricGather {
   amrex::Array4<const amrex::Real> lapse;  // 1 component
   amrex::Array4<const amrex::Real> shift;  // 3 components
   double prob_lo[3];
+  // The domain's upper corner (geom.ProbHi), carried purely for the
+  // [MCNX-GPU-05] escape predicate of mcnux_escape.hxx at the push/episode
+  // sites; no gather arithmetic reads it.
+  double prob_hi[3];
   double dx[3];
 
   // Un-pinned entry point: floor the anchor from the position, then sample.

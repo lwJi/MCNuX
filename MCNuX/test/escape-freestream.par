@@ -1,0 +1,104 @@
+# escape-freestream — per-species escape tallies at the outer domain
+# boundary ([MCNX-GPU-05] of specs/particle-container-and-gpu.md: packets
+# whose positions leave the domain are removed and TALLIED as escapes,
+# never silently dropped) as a Cactus regression test.
+#
+# A minkowski-freestream clone run longer (8 steps instead of 4), so that a
+# known subset of the deterministic eight-packet fixture exits the
+# [-1, 1]^3 domain. On Minkowski every packet travels a straight line at
+# coordinate speed 1, so the exit iterations are straight-line arithmetic
+# (dt = 0.125; the half-open escape predicate makes an exact upper-face
+# landing x >= +1 an escape, while an exact lower-face landing x == -1 is
+# still inside — selftest rows 158/159 pin that convention; verified
+# empirically at golden capture):
+#   * it 7: row 1 (+x from 0.125, lands exactly on x = +1), row 3 (+y from
+#     0.125), row 5 (+z from 0.125), and oblique row 7 (crosses x = +1 at
+#     t ~ 0.859 mid-step) — four escapes;
+#   * it 8: rows 2, 4, 6 (the -axis packets land exactly ON -1 at it 7 —
+#     still inside — and pass beyond at it 8) — three more escapes;
+#   * row 8 (oblique, +y dominant) would exit y = +1 only at it 9, so
+#     itlast = 8 leaves exactly this one survivor.
+# All fixture packets are species 0 (nu_e) with weight N = 1 and p^t = |p|
+# on Minkowski, so the expected final tallies are: species-0 count = 7,
+# number = 7, energy = Sum |p| over the seven escapers
+# = 1 + 2 + 0.25 + sqrt(0.328125) + 1 + 0.5 + 4 = 8.75 + sqrt(0.328125)
+# ~ 9.3227794; the nu_e_bar and nu_x rows stay exactly 0 (single-species
+# fixture; per-species generality is carried by selftest rows 156..161).
+#
+# Golden data, one file set per iteration (harness defaults
+# ABSTOL = RELTOL = 1e-12):
+#   * MCNuX::mcnux_escape_diag — the run-cumulative species-major tally
+#     (3 species x {count, number Sum N, energy Sum N p^t}), stepping up by
+#     exactly the escaped packets' content at it 7 and it 8;
+#   * MCNuX::mcnux_packet_diag — the discrete-removal observable: the table
+#     is zeroed then refilled from LIVE packets only, so an escaped packet's
+#     row flips to all-zero at its escape iteration (the live-packet count
+#     drops by exactly the escape count).
+#
+# The [MCNX-GPU-04] runtime id-contract check (MCNuX::test_id_contract, the
+# absorb-smoke precedent) runs every step and hard-aborts on any violation —
+# escaped ids must be retired, never reissued. It writes no golden artifact.
+#
+# ODESolvers must be active: ADMBaseX initial data is scheduled only
+# IN ODESolvers_Initial, and MCNuX_GeodesicPush reads the metric.
+#
+# No interactions, no RNG draw: the run is fully deterministic.
+
+ActiveThorns = "
+    CarpetX
+    IOUtil
+    ODESolvers
+    ADMBaseX
+    HydroBaseX
+    MCNuX
+"
+
+# Mandatory for any MCNuX run: CarpetX's own CCTK_PARAMCHECK routine rejects
+# every other presync mode.
+Cactus::presync_mode = "mixed-error"
+
+# The subject of this benchmark: the synthetic packet fixture, its push, the
+# escape tallies, and the id-contract guard. The other verification
+# scaffolding is off.
+MCNuX::test_synthetic_packets = yes
+MCNuX::test_escape_tallies = yes
+MCNuX::test_id_contract = yes
+MCNuX::test_synthetic_deposit = no
+MCNuX::run_selftests = no
+
+# Zero opacities (no interactions): the analytic coefficient source with its
+# default kappa_a0 = kappa_s0 = 0. Nothing consumes the coefficients here;
+# this documents the intent.
+MCNuX::opacity_source = "analytic"
+
+# Flat background: the ADMBaseX defaults, restated.
+ADMBaseX::initial_data = "Cartesian Minkowski"
+ADMBaseX::initial_lapse = "one"
+ADMBaseX::initial_shift = "zero"
+
+# 8^3 cells over the CarpetX default domain [-1, 1]^3 (dx = 0.25; default
+# dtfac gives dt = 0.125). Eight steps move every packet by 1.0 from its
+# seed position: seven of the eight packets cross the boundary (exit-step
+# table above) and exactly one survives.
+CarpetX::ncells_x = 8
+CarpetX::ncells_y = 8
+CarpetX::ncells_z = 8
+
+Cactus::cctk_itlast = 8
+
+IO::out_dir = $parfile
+IO::out_every = 1
+IO::parfile_write = no
+
+# Keep the column-label header but drop IOUtil's creation date, hostname, and
+# absolute parameter-file path (see unit-selftest.par).
+IO::out_fileinfo = "axis labels"
+
+CarpetX::out_metadata = no
+
+# The golden data: the cumulative escape tallies and the per-packet
+# diagnostic table (discrete removal), one file set per iteration.
+CarpetX::out_tsv_vars = "
+    MCNuX::mcnux_escape_diag
+    MCNuX::mcnux_packet_diag
+"

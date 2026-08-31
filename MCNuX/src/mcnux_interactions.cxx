@@ -50,6 +50,7 @@
 #include "mcnux_coefficients.hxx"
 #include "mcnux_deposit.hxx"
 #include "mcnux_emission.hxx" // packet_rng_key
+#include "mcnux_escape.hxx"
 #include "mcnux_fluid.hxx"
 #include "mcnux_geodesic.hxx"
 #include "mcnux_interactions.hxx"
@@ -127,6 +128,12 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
   amrex::Gpu::DeviceVector<double> audit_dev(14, 0.0);
   double *const audit_ptr = audit_dev.data();
 
+  // ONE step-scoped escape buffer shared by every tile's kernel
+  // ([MCNX-GPU-05], mcnux_escape.hxx; the push-site precedent in
+  // mcnux_geodesic.cxx — per-tile buffers would lose counts).
+  amrex::Gpu::DeviceVector<double> esc_dev(escape_num_slots, 0.0);
+  double *const esc_ptr = esc_dev.data();
+
   for_each_packet_tile_raw([&](const CarpetX::GHExt::PatchData &patchdata,
                                const CarpetX::GHExt::PatchData::LevelData
                                    &leveldata,
@@ -179,8 +186,19 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
           std::uint64_t(amrex::particle_impl::unpack_cpu(ptd.m_idcpu[ip])));
 
       double dt_rem = dt_step;
+      // Last-in-domain position anchor of the escape energy tally
+      // (mcnux_escape.hxx convention): refreshed at every episode start
+      // while the packet is still inside the domain, so an escaping
+      // packet's p^t is evaluated on a metric gather that never leaves
+      // the domain.
+      double x_last_inside[3] = {x[0], x[1], x[2]};
       int it = 0;
       for (; it < max_episodes_per_step && dt_rem > 0.0; ++it) {
+        if (!outside_domain(x, mgather.prob_lo, mgather.prob_hi)) {
+          x_last_inside[0] = x[0];
+          x_last_inside[1] = x[1];
+          x_last_inside[2] = x[2];
+        }
         // (1) [MCNX-INT-06]: e increments by 1 at EVERY episode start
         // (step start, post-scatter, cell crossing; creation left e = 0,
         // so the first episode uses e = 1).
@@ -348,6 +366,29 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
 
       amrex::Gpu::Atomic::Max(&audit_ptr[12], double(it + 1));
 
+      // Escape check ([MCNX-GPU-05], mcnux_escape.hxx): a packet whose
+      // final position left the domain is tallied per species and removed
+      // via make_invalid (tally strictly BEFORE invalidation) — the same
+      // sequence as the push site, using the last-in-domain metric anchor
+      // for p^t. Skipped for packets the Absorb branch already invalidated
+      // (their validity bit is clear); the unconditional Redistribute()
+      // below compacts both removal routes alike.
+      if ((ptd.m_idcpu[ip] >> 63) != 0 &&
+          outside_domain(x, mgather.prob_lo, mgather.prob_hi)) {
+        const MetricSnapshot me =
+            mgather(x_last_inside[0], x_last_inside[1], x_last_inside[2]);
+        const InverseSpatialMetric gue = spatial_metric_inverse(me.g);
+        const double pt_esc = p_t_closure(p[0], p[1], p[2], gue, me.alpha);
+        const int sidx = species_index(s);
+        amrex::Gpu::Atomic::AddNoRet(
+            &esc_ptr[escape_slot(sidx, escape_channel_count)], 1.0);
+        amrex::Gpu::Atomic::AddNoRet(
+            &esc_ptr[escape_slot(sidx, escape_channel_number)], N);
+        amrex::Gpu::Atomic::AddNoRet(
+            &esc_ptr[escape_slot(sidx, escape_channel_energy)], N * pt_esc);
+        amrex::particle_impl::make_invalid(ptd.m_idcpu[ip]);
+      }
+
       ptd.rdata(PIdx::x)[ip] = x[0];
       ptd.rdata(PIdx::y)[ip] = x[1];
       ptd.rdata(PIdx::z)[ip] = x[2];
@@ -371,6 +412,16 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
                           audit_host[3], audit_host[4]};
   audit.gross = LedgerDelta{audit_host[5], audit_host[6], audit_host[7],
                             audit_host[8], audit_host[9]};
+
+  // Fold the step's escapes into the run-cumulative tally ([MCNX-GPU-05];
+  // NOT part of the ledger audit above — escapes deposit nothing and never
+  // join the closure, per the mcnux_escape.hxx storage-surface decision).
+  {
+    std::vector<double> esc_host(escape_num_slots, 0.0);
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost, esc_dev.begin(), esc_dev.end(),
+                     esc_host.begin());
+    escape_run_tally().add_slots(esc_host.data());
+  }
 
   CCTK_VINFO("MCNuX episode driver: %ld episodes, %ld scattering events, "
              "%ld absorption events, max %ld episodes/packet (cap %d)",

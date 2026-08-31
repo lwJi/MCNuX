@@ -106,6 +106,7 @@ make_gather(const CarpetX::GHExt::PatchData &patchdata,
   const amrex::Geometry &geom = patchdata.amrcore->Geom(leveldata.level);
   for (int d = 0; d < 3; ++d) {
     gather.prob_lo[d] = geom.ProbLo(d);
+    gather.prob_hi[d] = geom.ProbHi(d);
     gather.dx[d] = geom.CellSize(d);
   }
   return gather;

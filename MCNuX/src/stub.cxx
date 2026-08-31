@@ -1,6 +1,7 @@
 #include "mcnux_coefficients.hxx"
 #include "mcnux_deposit.hxx"
 #include "mcnux_emission.hxx"
+#include "mcnux_escape.hxx"
 #include "mcnux_fluid.hxx"
 #include "mcnux_gather.hxx"
 #include "mcnux_geodesic.hxx"

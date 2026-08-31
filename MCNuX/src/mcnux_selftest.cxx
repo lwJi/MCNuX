@@ -299,6 +299,23 @@
 // 155       statsem.sigma.phi_pi_proportional     [MCNX-VER-07] (phi sigma
 //                                                 == pi * cos theta sigma,
 //                                                 bitwise product identity)
+// 156       escape.slot.species_major             [MCNX-GPU-05] (slot =
+//                                                 3 * species + channel over
+//                                                 the full 3 x 3 grid, exact)
+// 157       escape.domain.interior_inside         [MCNX-GPU-05] (interior
+//                                                 point is not an escape)
+// 158       escape.domain.lo_face_inside          [MCNX-GPU-05] (exactly on
+//                                                 the lower domain face =
+//                                                 inside, half-open)
+// 159       escape.domain.hi_face_escaped         [MCNX-GPU-05] (exactly on
+//                                                 the upper domain face =
+//                                                 escaped, half-open >=)
+// 160       escape.domain.one_axis_beyond         [MCNX-GPU-05] (leaving a
+//                                                 single axis suffices)
+// 161       escape.tally.accumulate               [MCNX-GPU-05] (per-species
+//                                                 {count, Sum N, Sum N p^t}
+//                                                 on a two-species hand
+//                                                 fixture, exact)
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -442,6 +459,13 @@ void run_battery(Battery &b) {
   // mean/second-moment sigmas at the pinned N = 2^20, and the isotropy
   // cos(theta)/phi sample-mean sigmas.
   append_stats_emission_rows(b);
+
+  // Rows 156..161 — the [MCNX-GPU-05] escape-tally arithmetic of
+  // specs/particle-container-and-gpu.md (species-major slot map, half-open
+  // outside_domain predicate, per-species {count, number, energy}
+  // accumulation) through the mcnux_escape.hxx pure functions on exact
+  // binary-fraction fixtures.
+  append_escape_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.
