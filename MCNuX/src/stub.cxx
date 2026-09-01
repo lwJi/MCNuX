@@ -14,6 +14,7 @@
 #include "mcnux_stats.hxx"
 #include "mcnux_stats_beam.hxx"
 #include "mcnux_stats_emission.hxx"
+#include "mcnux_stats_scatterbox.hxx"
 #include "mcnux_stats_writer.hxx"
 #include "mcnux_table_coeffs.hxx"
 #include "mcnux_table_range.hxx"

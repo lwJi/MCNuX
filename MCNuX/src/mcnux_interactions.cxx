@@ -58,6 +58,8 @@
 #include "mcnux_srcterms.hxx"
 #include "mcnux_stats.hxx"
 #include "mcnux_stats_beam.hxx"
+#include "mcnux_stats_emission.hxx" // sigma_isotropy_* (scatterbox reuse)
+#include "mcnux_stats_scatterbox.hxx"
 #include "mcnux_stats_writer.hxx"
 #include "mcnux_table_range.hxx"
 #include "mcnux_tetrad.hxx"
@@ -99,6 +101,15 @@ constexpr int max_episodes_per_step = 10000;
 // MCNuX_StatsBeam's exact count-closure row — with a single-species
 // pure-absorber beam the single scalar is the whole absorbed tally.
 double g_absorbed_run_count = 0.0;
+
+// Run-cumulative scattering-statistics accumulator of the stats-scatterbox
+// benchmark (the g_absorbed_run_count mechanism above: per-step += at the
+// fold below, never reset; populated only under test_stats_scatterbox).
+// Slot layout: 0 Sum k (scattering events, k the per-packet count),
+// 1 Sum k^2, 2 packets sampled, 3 Sum cos theta, 4 Sum phi (per-event
+// post-scatter draw values). Consumer: MCNuX_StatsScatterbox below.
+constexpr int scatterbox_num_slots = 5;
+double g_scatterbox_run[scatterbox_num_slots] = {};
 
 } // namespace
 
@@ -147,6 +158,16 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
   // mcnux_geodesic.cxx — per-tile buffers would lose counts).
   amrex::Gpu::DeviceVector<double> esc_dev(escape_num_slots, 0.0);
   double *const esc_ptr = esc_dev.data();
+
+  // Step-scoped scattering-statistics buffer of the stats-scatterbox
+  // benchmark ([MCNX-INT-02]/[MCNX-INT-04], [MCNX-VER-07]; slot layout at
+  // g_scatterbox_run above). The pointer is NULL unless
+  // test_stats_scatterbox, and the kernel branches on the pointer, so the
+  // default path performs zero additional FP operations and every
+  // pre-existing benchmark's golden data stays bitwise-identical.
+  amrex::Gpu::DeviceVector<double> sb_dev(
+      test_stats_scatterbox ? scatterbox_num_slots : 0, 0.0);
+  double *const sb_ptr = test_stats_scatterbox ? sb_dev.data() : nullptr;
 
   for_each_packet_tile_raw([&](const CarpetX::GHExt::PatchData &patchdata,
                                const CarpetX::GHExt::PatchData::LevelData
@@ -213,6 +234,10 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
       // packet's p^t is evaluated on a metric gather that never leaves
       // the domain.
       double x_last_inside[3] = {x[0], x[1], x[2]};
+      // Loop-local per-packet scattering-event counter of the
+      // stats-scatterbox benchmark (a plain register, no per-packet storage
+      // and no new counter surface; integer-only on the default path).
+      int n_scat = 0;
       int it = 0;
       for (; it < max_episodes_per_step && dt_rem > 0.0; ++it) {
         if (!outside_domain(x, mgather.prob_lo, mgather.prob_hi)) {
@@ -379,6 +404,18 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
         // episode-start tetrad/metric/nu. p_in is the packet's p_i at
         // event time (post-segment) with the frozen episode p^t.
         const ScatterUniforms su = scatter_uniforms(S, q, e);
+        ++n_scat;
+        if (sb_ptr != nullptr) {
+          // Per-event isotropy accumulation of the stats-scatterbox
+          // benchmark ([MCNX-INT-04]): recompute the draw-map values
+          // cos theta = 2 u1 - 1 and phi = 2 pi u2 right at the draw site
+          // (the mcnux_emission.cxx recomputation idiom — no new draws, no
+          // new pure functions; scatter_redraw below consumes the SAME
+          // uniforms).
+          amrex::Gpu::Atomic::AddNoRet(&sb_ptr[3], 2.0 * su.u1 - 1.0);
+          amrex::Gpu::Atomic::AddNoRet(&sb_ptr[4],
+                                       2.0 * detail::pi * su.u2);
+        }
         const Tetrad tet = build_tetrad(ms.alpha, ms.beta, ms.g, u4);
         const SpacetimeMetric gm =
             spacetime_metric_from_adm(ms.alpha, ms.beta, ms.g);
@@ -410,6 +447,17 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
       }
 
       amrex::Gpu::Atomic::Max(&audit_ptr[12], double(it + 1));
+
+      // Fold this packet's per-step scattering statistics into the gated
+      // step buffer (Sum k, Sum k^2, packets sampled): the [MCNX-INT-02]
+      // Poisson observable of the stats-scatterbox benchmark. Runs for
+      // every packet that entered the episode loop, whatever ended it.
+      if (sb_ptr != nullptr) {
+        const double k = double(n_scat);
+        amrex::Gpu::Atomic::AddNoRet(&sb_ptr[0], k);
+        amrex::Gpu::Atomic::AddNoRet(&sb_ptr[1], k * k);
+        amrex::Gpu::Atomic::AddNoRet(&sb_ptr[2], 1.0);
+      }
 
       // Escape check ([MCNX-GPU-05], mcnux_escape.hxx): a packet whose
       // final position left the domain is tallied per species and removed
@@ -467,6 +515,17 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
     amrex::Gpu::copy(amrex::Gpu::deviceToHost, esc_dev.begin(), esc_dev.end(),
                      esc_host.begin());
     escape_run_tally().add_slots(esc_host.data());
+  }
+
+  // Fold the step's scattering statistics into the run-cumulative
+  // accumulator (the stats-scatterbox benchmark; the g_absorbed_run_count
+  // mechanism — never reset). Skipped entirely on the default path.
+  if (test_stats_scatterbox) {
+    std::vector<double> sb_host(scatterbox_num_slots, 0.0);
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost, sb_dev.begin(), sb_dev.end(),
+                     sb_host.begin());
+    for (int i = 0; i < scatterbox_num_slots; ++i)
+      g_scatterbox_run[i] += sb_host[i];
   }
 
   CCTK_VINFO("MCNuX episode driver: %ld episodes, %ld scattering events, "
@@ -662,6 +721,134 @@ extern "C" void MCNuX_StatsBeam(CCTK_ARGUMENTS) {
 
     put(0, zscore(transmitted, N_p * p, sigma_beam_transmission(N_p, p)));
     put(1, zscore(transmitted + absorbed, N_p, 1.0));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Statistical-reduction writer  (MCNuX::mcnux_stats_scatterbox_diag)
+// ---------------------------------------------------------------------------
+// The `stats-scatterbox` benchmark writer ([MCNX-INT-02]/[MCNX-INT-04],
+// specs/neutrino-matter-interactions.md:201-207; [MCNX-VER-07],
+// verification-suite-design.md:266): reduce the episode driver's uniform
+// pure-scattering box step into (estimate, expected, sigma, z) rows through
+// the frozen MCNuX::zscore() (called verbatim, never reimplemented) and the
+// shared StatsDiagView scaffold. Poisson sigma formulas are benchmark-owned
+// (mcnux_stats_scatterbox.hxx, never mcnux_stats.hxx — its binding
+// non-goal); the isotropy sigmas are the REUSED sigma_isotropy_* pair of
+// mcnux_stats_emission.hxx (identical draw distribution, see that header).
+// Acceptance |z| <= 4 is judged once at golden capture; thereafter the
+// archived z values are golden numbers diffed at 1e-12.
+//
+// The Poisson expectation: l_path := c * Delta t of the SINGLE transport
+// step = cctk_delta_time in code units (the pinned operational definition —
+// a null packet on the at-rest Minkowski background moves at coordinate
+// speed 1 through every scattering direction change), and
+// lambda = kappa_s_code * l_path with kappa_s_code =
+// opacity_cgs_to_code(kappa_s0[0]) — the episode driver's own conversion
+// path for the analytic nu_e coefficients, never a retyped literal. The
+// per-cell episode redraw is statistically exact by memorylessness in the
+// uniform medium, so per-packet counts are exactly Poisson(lambda)
+// (mcnux_stats_scatterbox.hxx).
+//
+// Row layout (SIZE=5; n_ev = Sum k the realized scattering-event count):
+//   0  Poisson sample mean: kbar = Sum k / N_p vs lambda,
+//      sigma = sigma_poisson_mean(lambda, N_p);
+//   1  Poisson unbiased sample variance:
+//      S^2 = (Sum k^2 - N_p kbar^2)/(N_p - 1) vs lambda,
+//      sigma = sigma_poisson_variance(lambda, N_p) (documented large-N
+//      leading order (lambda + 2 lambda^2)/N_p);
+//   2  post-scatter isotropy, cos theta first moment: Sum cos theta / n_ev
+//      vs 0, sigma = sigma_isotropy_costheta(n_ev);
+//   3  post-scatter isotropy, phi first moment: Sum phi / n_ev vs pi,
+//      sigma = sigma_isotropy_phi(n_ev);
+//   4  exact closure: packets sampled vs N_p at sigma = 1, so z is the raw
+//      packet discrepancy (0 at closure; the sigma = 1 convention of the
+//      beam's closure row).
+//
+// The accumulator is RUN-CUMULATIVE (g_scatterbox_run above), which equals
+// the per-step value here: the benchmark runs exactly ONE transport step.
+// The AT initial leg keeps the deterministic zero fill. Hard errors on the
+// three outcomes the design proves impossible (zero realized events, any
+// absorption, any escape): each would silently bias the statistics, so a
+// violated design assumption must abort rather than mis-capture.
+extern "C" void MCNuX_StatsScatterbox(CCTK_ARGUMENTS) {
+  DECLARE_CCTK_ARGUMENTS_MCNuX_StatsScatterbox;
+  DECLARE_CCTK_PARAMETERS;
+
+  require_driver();
+
+  constexpr int expected_rows = 5;
+  const int nrows = diag_array_size("MCNuX::mcnux_stats_scatterbox_diag");
+  if (nrows != expected_rows)
+    CCTK_VERROR("MCNuX::mcnux_stats_scatterbox_diag has SIZE=%d but "
+                "MCNuX_StatsScatterbox writes %d check rows; the two must "
+                "agree (MCNuX/interface.ccl)",
+                nrows, expected_rows);
+
+  const StatsDiagView view{sscat_estimate, sscat_expected, sscat_sigma,
+                           sscat_z, nrows};
+  view.zero_fill();
+
+  const auto put = [&](int r, const ZScore &zs) {
+    view.put(r, zs);
+    CCTK_VINFO("MCNuX stats-scatterbox row %d: estimate = %.17g, expected = "
+               "%.17g, sigma = %.17g, z = %.17g  %s",
+               r, zs.estimate, zs.expected, zs.sigma, zs.z,
+               zs.pass ? "PASS" : "FAIL");
+  };
+
+  // In-step only (the AT initial leg keeps the zero fill above).
+  if (cctk_iteration > 0) {
+    const double kappa_code = opacity_cgs_to_code(kappa_s0[0]);
+    const double l_path = cctk_delta_time; // c dt, code units (c = 1)
+    const double lambda = kappa_code * l_path;
+    const double N_p = double(scatterbox_num_packets);
+    if (!(lambda > 0.0) || !(N_p > 1.0))
+      CCTK_VERROR("MCNuX stats-scatterbox needs kappa_s0[0] > 0, dt > 0, and "
+                  "at least two packets (got lambda = %.17g, N_p = %.17g): a "
+                  "zero-rate box has sigma = 0 and no statistical content, "
+                  "and the unbiased variance needs N_p - 1 > 0 "
+                  "([MCNX-VER-07])",
+                  lambda, N_p);
+
+    const double sum_k = g_scatterbox_run[0];
+    const double sum_k2 = g_scatterbox_run[1];
+    const double sampled = g_scatterbox_run[2];
+    const double sum_costheta = g_scatterbox_run[3];
+    const double sum_phi = g_scatterbox_run[4];
+
+    // Design guarantees of the benchmark (kappa_a = 0, seeding cube +
+    // path length strictly inside the domain): no absorption, no escape,
+    // and a nonzero realized event count. Any violation biases the Poisson
+    // and isotropy statistics — hard error, never a silent mis-capture.
+    if (!(sum_k > 0.0))
+      CCTK_VERROR("MCNuX stats-scatterbox realized ZERO scattering events "
+                  "(expected ~ N_p lambda = %.17g): the pure-scattering box "
+                  "produced no statistics to reduce",
+                  N_p * lambda);
+    if (g_absorbed_run_count != 0.0)
+      CCTK_VERROR("MCNuX stats-scatterbox counted %.17g absorption events, "
+                  "but the pure-scattering design (kappa_a0 = 0 -> "
+                  "Delta t_a = +inf) proves zero are reachable",
+                  g_absorbed_run_count);
+    double escaped = 0.0;
+    for (int i = 0; i < escape_num_slots; ++i)
+      escaped += escape_run_tally().v[i];
+    if (escaped != 0.0)
+      CCTK_VERROR("MCNuX stats-scatterbox tallied nonzero escapes (slot sum "
+                  "%.17g), but the seeding-cube + path-length construction "
+                  "(h + c dt inside the domain half-width) proves zero are "
+                  "reachable",
+                  escaped);
+
+    const double kbar = sum_k / N_p;
+    const double svar = (sum_k2 - N_p * kbar * kbar) / (N_p - 1.0);
+
+    put(0, zscore(kbar, lambda, sigma_poisson_mean(lambda, N_p)));
+    put(1, zscore(svar, lambda, sigma_poisson_variance(lambda, N_p)));
+    put(2, zscore(sum_costheta / sum_k, 0.0, sigma_isotropy_costheta(sum_k)));
+    put(3, zscore(sum_phi / sum_k, detail::pi, sigma_isotropy_phi(sum_k)));
+    put(4, zscore(sampled, N_p, 1.0));
   }
 }
 

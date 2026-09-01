@@ -159,6 +159,25 @@ if (test_stats_beam)
   } "Seed the deterministic collimated monoenergetic beam fixture"
 }
 
+# Scatterbox seeding fixture of the `stats-scatterbox` benchmark
+# ([MCNX-INT-02]/[MCNX-INT-04] collision statistics + scattering isotropy;
+# parameter-gated by MCNuX::test_stats_scatterbox): seed the deterministic
+# cell-center packet lattice once AT initial, after ODESolvers_Initial (the
+# SeedBeamPackets slot — the population must exist before the first
+# transport step). Global mode: the seeder touches no grid variables at all
+# (deterministic index arithmetic, no RNG, geometry reached through ghext),
+# so it carries no READS:/WRITES: clauses ([MCNX-CTX-04] — the packet
+# container is not a grid variable).
+
+if (test_stats_scatterbox)
+{
+  SCHEDULE MCNuX_SeedScatterboxPackets AT initial AFTER ODESolvers_Initial
+  {
+    LANG: C
+    OPTIONS: global
+  } "Seed the deterministic scatterbox packet lattice fixture"
+}
+
 # The plain push runs only when the episode driver does not: the driver
 # occupies the same slot and subsumes the push (it advances every packet by
 # the full transport dt across its episode segments), so scheduling both
@@ -270,6 +289,40 @@ if (test_stats_beam)
     READS: MCNuX::mcnux_stats_beam_diag(everywhere)
     WRITES: MCNuX::mcnux_stats_beam_diag(everywhere)
   } "Reduce the beam run into (estimate, expected, sigma, z) statistical check rows"
+}
+
+# Statistical-reduction writer of the `stats-scatterbox` benchmark
+# ([MCNX-INT-02]/[MCNX-INT-04] collision statistics + scattering isotropy of
+# specs/neutrino-matter-interactions.md:201-207; [MCNX-VER-07];
+# parameter-gated by MCNuX::test_stats_scatterbox): reduce the episode
+# driver's pure-scattering box run into the (estimate, expected, sigma, z)
+# rows of the MCNuX::mcnux_stats_scatterbox_diag table. The AT initial leg
+# defines iteration-0 output (zero fill — no transport has run); the in-step
+# leg runs AFTER MCNuX_EpisodeDriver, i.e. after the step's scattering
+# statistics have been folded into the run accumulator it reads. Modes
+# mirror the MCNuX_StatsBeam pair ([MCNX-CTX-03]); the routine reads no grid
+# functions — the self pair on the verdict table is its complete
+# grid-variable footprint ([MCNX-CTX-04]; the tallies are TU-local state in
+# mcnux_interactions.cxx, not grid variables).
+
+if (test_stats_scatterbox)
+{
+  STORAGE: mcnux_stats_scatterbox_diag
+
+  SCHEDULE MCNuX_StatsScatterbox AT initial AFTER ODESolvers_Initial
+  {
+    LANG: C
+    OPTIONS: global
+    WRITES: MCNuX::mcnux_stats_scatterbox_diag(everywhere)
+  } "Fill the scatterbox statistical-check verdict table (initial data: zero fill)"
+
+  SCHEDULE MCNuX_StatsScatterbox IN MCNuX_TransportStep AFTER MCNuX_EpisodeDriver
+  {
+    LANG: C
+    OPTIONS: level
+    READS: MCNuX::mcnux_stats_scatterbox_diag(everywhere)
+    WRITES: MCNuX::mcnux_stats_scatterbox_diag(everywhere)
+  } "Reduce the scatterbox run into (estimate, expected, sigma, z) statistical check rows"
 }
 
 # Runtime id-contract check of specs/particle-container-and-gpu.md

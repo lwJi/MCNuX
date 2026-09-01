@@ -351,6 +351,24 @@
 //                                                 at the deterministic
 //                                                 endpoints p in {0, 1},
 //                                                 exact)
+// 170       statsscat.var.mean_exact              [MCNX-VER-07] (Poisson
+//                                                 sample-mean variance
+//                                                 lambda/n: (1/2)/4 = 1/8,
+//                                                 exact)
+// 171       statsscat.var.variance_exact          [MCNX-VER-07] (Poisson
+//                                                 sample-variance variance
+//                                                 (lambda + 2 lambda^2)/n:
+//                                                 (1/2 + 1/2)/4 = 1/4,
+//                                                 exact — the lambda term
+//                                                 is load-bearing)
+// 172       statsscat.sigma.mean_exact            [MCNX-VER-07] (sample-mean
+//                                                 sigma sqrt(lambda/n)
+//                                                 exact: sqrt(2^-18) = 2^-9
+//                                                 at the pinned N_p = 2^20)
+// 173       statsscat.sigma.variance_exact        [MCNX-VER-07] (sample-
+//                                                 variance sigma exact on a
+//                                                 perfect square:
+//                                                 sqrt(1/4) = 1/2)
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -519,6 +537,15 @@ void run_battery(Battery &b) {
   // perfect-square sigma at the pinned N_p = 2^20, and the sigma = 0
   // deterministic endpoints.
   append_stats_beam_rows(b);
+
+  // Rows 170..173 — the benchmark-owned Poisson standard-error formulas of
+  // the stats-scatterbox statistical benchmark ([MCNX-INT-02]/[MCNX-INT-04]
+  // collision statistics, [MCNX-VER-07]) through
+  // mcnux_stats_scatterbox.hxx: exact rational fixtures of the sample-mean
+  // variance lambda/n and the sample-variance variance
+  // (lambda + 2 lambda^2)/n, and exact perfect-square sqrt fixtures for
+  // both sigmas (one at the pinned N_p = 2^20).
+  append_stats_scatterbox_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.

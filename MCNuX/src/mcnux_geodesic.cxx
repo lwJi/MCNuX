@@ -375,6 +375,107 @@ extern "C" void MCNuX_SeedBeamPackets(CCTK_ARGUMENTS) {
 }
 
 // ---------------------------------------------------------------------------
+// Scatterbox seeding fixture  (the `stats-scatterbox` benchmark)
+// ---------------------------------------------------------------------------
+
+// Deterministic monoenergetic packet lattice of the [MCNX-INT-02/04]
+// collision-statistics benchmark (specs/neutrino-matter-interactions.md:
+// 201-207; gated by MCNuX::test_stats_scatterbox), modeled line-for-line on
+// MCNuX_SeedBeamPackets above: scatterbox_num_packets nu_e packets of
+// weight 1.0, all with the identical +x null momentum p_i = (E_code, 0, 0)
+// (on the benchmark's Minkowski background the null closure gives
+// p^t = E_code and coordinate speed 1, so one transport step gives every
+// packet path length exactly c dt = cctk_delta_time — the benchmark's
+// pinned l_path). Ids are 1..N with cpu 0 (the synthetic-fixture idiom;
+// MCNuX_ParamCheck forbids the scatterbox together with enable_emission,
+// test_synthetic_packets, and test_stats_beam, so no id collision is
+// reachable), and NO RNG draw is consumed by seeding.
+//
+// Geometry (the one change from the beam's y-z plane lattice): a 3D
+// cell-center lattice n^3 with n = ceil(cbrt(np)) by integer search
+// (np = 2^20 gives n = 102), filled by linear index
+// i -> (i % n, (i/n) % n, i/n^2) over the inner cube [-h, h]^3 with
+// h = scatterbox_half_width. The cube must be strictly inside the domain
+// (hard error below); with h + c dt below the domain half-width no packet
+// can reach a face within the single transport step (the maximum
+// displacement is the path length c dt, direction changes only shorten the
+// net displacement), so the run has ZERO escapes by construction — the
+// writer MCNuX_StatsScatterbox hard-errors if any occur. No per-packet
+// diagnostic table is written (the beam precedent: the observable is the
+// aggregate statistical reduction, never a 2^20-row table).
+extern "C" void MCNuX_SeedScatterboxPackets(CCTK_ARGUMENTS) {
+  DECLARE_CCTK_ARGUMENTS_MCNuX_SeedScatterboxPackets;
+  DECLARE_CCTK_PARAMETERS;
+
+  require_driver();
+
+  const long np = long(scatterbox_num_packets);
+  // Fluid-frame == coordinate-frame energy on the at-rest Minkowski
+  // background: E in MeV -> code via the pinned factor (the beam seeder's
+  // form; never a retyped literal).
+  const double E_code = scatterbox_energy_MeV / energy_code_to_MeV;
+
+  // The lattice lives on the patch-0 level-0 geometry (the benchmark is
+  // single-patch unigrid; Redistribute() would re-own packets anyway on a
+  // multi-box layout).
+  const auto &patchdata = CarpetX::ghext->patchdata.at(0);
+  const amrex::Geometry &geom = patchdata.amrcore->Geom(0);
+  const double h = scatterbox_half_width;
+  for (int d = 0; d < 3; ++d)
+    if (!(-h > geom.ProbLo(d)) || !(h < geom.ProbHi(d)))
+      CCTK_VERROR("MCNuX::scatterbox_half_width = %.17g puts the seeding "
+                  "cube [-h, h]^3 outside the axis-%d domain extent "
+                  "[%.17g, %.17g); the cube must be strictly inside the "
+                  "domain (a seed on or beyond a face would escape "
+                  "immediately — the escape predicate is half-open)",
+                  h, d, geom.ProbLo(d), geom.ProbHi(d));
+
+  // Smallest cubic lattice covering np: n = ceil(cbrt(np)) by integer
+  // search (np = 2^20 gives n = 102: 101^3 = 1030301 < 2^20 <= 1061208 =
+  // 102^3). Cell-center-style offsets (i + 0.5)/n keep every packet
+  // strictly inside the cube and off its faces.
+  long n = 1;
+  while (n * n * n < np)
+    ++n;
+  const double cell = 2.0 * h / double(n);
+
+  PacketContainer &pc = packet_population(0);
+  if (amrex::ParallelDescriptor::MyProc() == 0) {
+    using PinnedTile =
+        PacketContainer::ContainerLike<amrex::PinnedArenaAllocator>::ParticleTileType;
+    PinnedTile pinned;
+    pinned.define(0, 0);
+    pinned.resize(np);
+    const auto hd = pinned.getParticleTileData();
+    for (long i = 0; i < np; ++i) {
+      const long ix = i % n;
+      const long iy = (i / n) % n;
+      const long iz = i / (n * n);
+      hd.rdata(PIdx::x)[i] = -h + (double(ix) + 0.5) * cell;
+      hd.rdata(PIdx::y)[i] = -h + (double(iy) + 0.5) * cell;
+      hd.rdata(PIdx::z)[i] = -h + (double(iz) + 0.5) * cell;
+      hd.rdata(PIdx::px)[i] = E_code;
+      hd.rdata(PIdx::py)[i] = 0.0;
+      hd.rdata(PIdx::pz)[i] = 0.0;
+      hd.rdata(PIdx::w)[i] = 1.0;
+      hd.idata(IntIdx::species)[i] = 0; // nu_e
+      hd.idata(IntIdx::event_counter)[i] = 0;
+      hd.m_idcpu[i] = amrex::SetParticleIDandCPU(i + 1, 0);
+    }
+    auto &tile = pc.DefineAndReturnParticleTile(0, 0, 0);
+    const auto old_np = tile.numParticles();
+    tile.resize(old_np + np);
+    amrex::copyParticles(tile, pinned, 0, int(old_np), np);
+  }
+  pc.Redistribute();
+
+  CCTK_VINFO("MCNuX seeded %ld scatterbox packets on a %ld^3 lattice inside "
+             "[-%.17g, %.17g]^3, E = %.17g MeV (%ld in the population)",
+             np, n, h, h, double(scatterbox_energy_MeV),
+             long(pc.TotalNumberOfParticles()));
+}
+
+// ---------------------------------------------------------------------------
 // The geodesic push
 // ---------------------------------------------------------------------------
 

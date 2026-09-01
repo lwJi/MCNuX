@@ -344,6 +344,54 @@ CCTK_REAL beam_x0 "Seed-plane x coordinate of the beam [code units]; the slab th
   *:* :: "must lie inside the domain (checked at seeding; keep it off the x_lo face)"
 } -0.875
 
+# Scattering-collision-statistics benchmark switch of
+# specs/neutrino-matter-interactions.md ([MCNX-INT-02]/[MCNX-INT-04]
+# Verification: collision statistics + scattering isotropy, statistical,
+# 4 sigma) and specs/verification-suite-design.md [MCNX-VER-07] (the
+# `stats-scatterbox` benchmark): MCNuX::test_stats_scatterbox = yes seeds the
+# deterministic cell-center packet lattice inside the inner cube
+# [-scatterbox_half_width, +scatterbox_half_width]^3 at initial time
+# (MCNuX_SeedScatterboxPackets: scatterbox_num_packets nu_e packets with
+# identical +x null momenta, no RNG consumed), turns on the step-scoped
+# scattering-statistics accumulator inside MCNuX_EpisodeDriver, turns on
+# storage for the MCNuX::mcnux_stats_scatterbox_diag verdict table, and
+# schedules MCNuX_StatsScatterbox after the episode driver, reducing the run
+# into the Poisson mean/variance rows, the post-scatter isotropy rows, and
+# the exact packets-sampled closure row. Off by default — verification
+# scaffolding — and STEERABLE=NEVER, because the table's storage and the
+# routines' scheduling are decided from it at startup. MCNuX_ParamCheck
+# requires enable_interactions with it (the episode driver IS the scatterer)
+# and forbids it with enable_emission, test_synthetic_packets, AND
+# test_stats_beam (all other packet producers/seeders are id-collision /
+# duplicate-seeder hazards: this seeder writes hard-coded ids 1..N with
+# cpu 0).
+
+BOOLEAN test_stats_scatterbox "Seed the deterministic scattering-box lattice and reduce the run into the collision-statistics check rows" STEERABLE=NEVER
+{
+} "no"
+
+# Scatterbox fixture controls (ignored unless test_stats_scatterbox = yes;
+# all STEERABLE=NEVER — the fixture is written once at initial time and
+# golden data depends on it). The packet-count default is the pinned
+# statistical N_p = 2^20 of [MCNX-RNG-07] (stats_default_num_packets,
+# mcnux_stats.hxx); a benchmark pinning a different value documents it in
+# its parfile.
+
+CCTK_INT scatterbox_num_packets "Number of scatterbox packets (default: the pinned statistical N_p = 2^20 of [MCNX-RNG-07])" STEERABLE=NEVER
+{
+  1:* :: "at least one packet"
+} 1048576
+
+CCTK_REAL scatterbox_energy_MeV "Scatterbox packet energy [MeV] (monoenergetic; the Poisson count law is energy-independent for gray kappa_s0)" STEERABLE=NEVER
+{
+  (0:* :: "positive packet energy [MeV]"
+} 10.0
+
+CCTK_REAL scatterbox_half_width "Half-width h of the seeding cube [-h, h]^3 [code units]; must be strictly inside the domain (checked at seeding), and h + c dt below the domain half-width keeps the run escape-free by construction" STEERABLE=NEVER
+{
+  (0:* :: "positive half-width [code units]"
+} 0.4
+
 # The run's base RNG seed S of specs/rng-and-reproducibility.md: every
 # emission draw is an evaluation of the pure u(S, q, e, k) of mcnux_rng.hxx
 # at this S. The default is the pinned primary statistics seed

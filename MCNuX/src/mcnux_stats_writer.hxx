@@ -7,7 +7,8 @@
 // four column arrays of one mcnux_stats*_diag grid-array group, with the
 // deterministic zero fill and the per-row ZScore mirror that every stats
 // writer repeats (factored from MCNuX_StatsEmission, mcnux_emission.cxx;
-// second consumer MCNuX_StatsBeam, mcnux_interactions.cxx).
+// second consumer MCNuX_StatsBeam, third consumer MCNuX_StatsScatterbox,
+// both mcnux_interactions.cxx).
 //
 // Deliberately CCTK-free (plain double* columns — CCTK_REAL is binary64 by
 // the [MCNX-BLD-03] gate in stub.cxx), so the scaffold carries compile-time
