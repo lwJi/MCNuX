@@ -335,6 +335,22 @@
 //                                                 rule; alpha = 1 identity
 //                                                 endpoint; -1 sentinel
 //                                                 selects the rule)
+// 166       statsbeam.p.zero_depth_one            [MCNX-VER-07] (exp(-k*0)
+//                                                 == 1 exactly, zero-depth
+//                                                 transmission endpoint)
+// 167       statsbeam.p.multiplicative            [MCNX-INT-02] (Beer-
+//                                                 Lambert p(L1+L2) ==
+//                                                 p(L1) p(L2), machine tier
+//                                                 on exact binary depths)
+// 168       statsbeam.sigma.exact                 [MCNX-VER-07] (binomial
+//                                                 count sigma
+//                                                 sqrt(N_p p (1-p)) exact:
+//                                                 sqrt(2^18) == 512 at the
+//                                                 pinned N_p = 2^20)
+// 169       statsbeam.sigma.degenerate_zero       [MCNX-VER-07] (sigma = 0
+//                                                 at the deterministic
+//                                                 endpoints p in {0, 1},
+//                                                 exact)
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -494,6 +510,15 @@ void run_battery(Battery &b) {
   // invariant through relabel, and the [MCNX-TRP-05] fixed-alpha override
   // path.
   append_trp_select_rows(b);
+
+  // Rows 166..169 — the benchmark-owned transmission-probability and
+  // binomial standard-error formulas of the stats-beam statistical
+  // benchmark ([MCNX-INT-01]/[MCNX-INT-03] beam attenuation,
+  // [MCNX-VER-07]) through mcnux_stats_beam.hxx: the exact zero-depth
+  // endpoint, machine-tier Beer-Lambert multiplicativity, an exact
+  // perfect-square sigma at the pinned N_p = 2^20, and the sigma = 0
+  // deterministic endpoints.
+  append_stats_beam_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.

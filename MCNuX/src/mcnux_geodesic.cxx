@@ -286,6 +286,95 @@ extern "C" void MCNuX_SeedSyntheticPackets(CCTK_ARGUMENTS) {
 }
 
 // ---------------------------------------------------------------------------
+// Beam seeding fixture  (the `stats-beam` benchmark)
+// ---------------------------------------------------------------------------
+
+// Deterministic collimated monoenergetic beam of the [MCNX-INT-01/03]
+// beam-attenuation benchmark (specs/neutrino-matter-interactions.md:197-200;
+// gated by MCNuX::test_stats_beam): beam_num_packets nu_e packets of weight
+// 1.0 at the seed plane x = beam_x0, spread over a deterministic y-z lattice
+// strictly inside the domain (index arithmetic only — NO RNG draw is
+// consumed by seeding), all with the identical +x null momentum
+// p_i = (E_code, 0, 0) (on the benchmark's Minkowski background the null
+// closure gives p^t = E_code and coordinate speed 1). Ids are 1..N with
+// cpu 0 (the synthetic-fixture idiom; MCNuX_ParamCheck forbids the beam
+// together with enable_emission and test_synthetic_packets, so no id
+// collision is reachable). Unlike the 8-row synthetic fixture this writes
+// NO per-packet diagnostic table — the benchmark observable is the
+// aggregate escape/absorption reduction of MCNuX_StatsBeam
+// (mcnux_interactions.cxx), never a 2^20-row table.
+extern "C" void MCNuX_SeedBeamPackets(CCTK_ARGUMENTS) {
+  DECLARE_CCTK_ARGUMENTS_MCNuX_SeedBeamPackets;
+  DECLARE_CCTK_PARAMETERS;
+
+  require_driver();
+
+  const long np = long(beam_num_packets);
+  // Fluid-frame == coordinate-frame energy on the at-rest Minkowski
+  // background: E in MeV -> code via the pinned factor (the emission loop's
+  // nu_MeV / energy_code_to_MeV form; never a retyped literal).
+  const double E_code = beam_energy_MeV / energy_code_to_MeV;
+
+  // The seed plane and lattice live on the patch-0 level-0 geometry (the
+  // benchmark is single-patch unigrid; Redistribute() would re-own packets
+  // anyway on a multi-box layout).
+  const auto &patchdata = CarpetX::ghext->patchdata.at(0);
+  const amrex::Geometry &geom = patchdata.amrcore->Geom(0);
+  const double xlo = geom.ProbLo(0), xhi = geom.ProbHi(0);
+  const double ylo = geom.ProbLo(1), yhi = geom.ProbHi(1);
+  const double zlo = geom.ProbLo(2), zhi = geom.ProbHi(2);
+  if (!(beam_x0 >= xlo) || !(beam_x0 < xhi))
+    CCTK_VERROR("MCNuX::beam_x0 = %.17g is outside the domain [%.17g, %.17g) "
+                "(the escape predicate is half-open: a seed ON the upper "
+                "face would escape immediately)",
+                double(beam_x0), xlo, xhi);
+
+  // Smallest square lattice covering np: nyz = ceil(sqrt(np)) by integer
+  // search (np = 2^20 gives nyz = 1024 exactly). Cell-center-style offsets
+  // (j + 0.5)/nyz keep every packet strictly inside the y/z extent and off
+  // every face for binary-exact domains.
+  long nyz = 1;
+  while (nyz * nyz < np)
+    ++nyz;
+  const double dy = (yhi - ylo) / double(nyz);
+  const double dz = (zhi - zlo) / double(nyz);
+
+  PacketContainer &pc = packet_population(0);
+  if (amrex::ParallelDescriptor::MyProc() == 0) {
+    using PinnedTile =
+        PacketContainer::ContainerLike<amrex::PinnedArenaAllocator>::ParticleTileType;
+    PinnedTile pinned;
+    pinned.define(0, 0);
+    pinned.resize(np);
+    const auto hd = pinned.getParticleTileData();
+    for (long i = 0; i < np; ++i) {
+      const long j = i % nyz;
+      const long k = i / nyz;
+      hd.rdata(PIdx::x)[i] = beam_x0;
+      hd.rdata(PIdx::y)[i] = ylo + (double(j) + 0.5) * dy;
+      hd.rdata(PIdx::z)[i] = zlo + (double(k) + 0.5) * dz;
+      hd.rdata(PIdx::px)[i] = E_code;
+      hd.rdata(PIdx::py)[i] = 0.0;
+      hd.rdata(PIdx::pz)[i] = 0.0;
+      hd.rdata(PIdx::w)[i] = 1.0;
+      hd.idata(IntIdx::species)[i] = 0; // nu_e
+      hd.idata(IntIdx::event_counter)[i] = 0;
+      hd.m_idcpu[i] = amrex::SetParticleIDandCPU(i + 1, 0);
+    }
+    auto &tile = pc.DefineAndReturnParticleTile(0, 0, 0);
+    const auto old_np = tile.numParticles();
+    tile.resize(old_np + np);
+    amrex::copyParticles(tile, pinned, 0, int(old_np), np);
+  }
+  pc.Redistribute();
+
+  CCTK_VINFO("MCNuX seeded %ld beam packets at x = %.17g on a %ld x %ld "
+             "y-z lattice, E = %.17g MeV (%ld in the population)",
+             np, double(beam_x0), nyz, nyz, double(beam_energy_MeV),
+             long(pc.TotalNumberOfParticles()));
+}
+
+// ---------------------------------------------------------------------------
 // The geodesic push
 // ---------------------------------------------------------------------------
 

@@ -111,6 +111,40 @@ extern "C" void MCNuX_ParamCheck(CCTK_ARGUMENTS) {
         "loop there is no step to reduce. Enable emission, or turn the "
         "statistical writer off.");
 
+  // stats-beam guards ([MCNX-VER-07]; the test_stats_emission precedent
+  // above and the id-collision precedent below): the beam benchmark reduces
+  // the episode driver's absorption/escape resolution, so the driver must
+  // run; and its seeder writes hard-coded packet ids 1..beam_num_packets
+  // with cpu 0 without touching the AMReX id counter, so any other packet
+  // producer/seeder in the same run is an id-collision or duplicate-seeder
+  // hazard.
+  if (test_stats_beam && !enable_interactions)
+    CCTK_VERROR(
+        "MCNuX::test_stats_beam = yes requires MCNuX::enable_interactions = "
+        "yes: the beam-attenuation writer MCNuX_StatsBeam reduces the episode "
+        "driver's pure-absorber resolution of the beam "
+        "([MCNX-INT-01]/[MCNX-INT-03], the `stats-beam` benchmark of "
+        "specs/verification-suite-design.md:265); without the driver no "
+        "packet is ever absorbed or escapes. Enable interactions, or turn "
+        "the beam benchmark off.");
+  if (test_stats_beam && enable_emission)
+    CCTK_VERROR(
+        "MCNuX::test_stats_beam = yes is incompatible with "
+        "MCNuX::enable_emission = yes: the beam seeder writes hard-coded "
+        "packet ids 1..beam_num_packets without touching the AMReX id "
+        "counter, so production packets created by the emission loop would "
+        "collide with them ([MCNX-GPU-04] id uniqueness), and emitted "
+        "packets would contaminate the beam's transmitted/absorbed count "
+        "closure.");
+  if (test_stats_beam && test_synthetic_packets)
+    CCTK_VERROR(
+        "MCNuX::test_stats_beam = yes is incompatible with "
+        "MCNuX::test_synthetic_packets = yes: both are initial-time packet "
+        "seeders writing hard-coded id ranges starting at 1, so their ids "
+        "would collide ([MCNX-GPU-04] id uniqueness), and the fixture "
+        "packets would contaminate the beam's transmitted/absorbed count "
+        "closure.");
+
   if (enable_emission && test_synthetic_packets)
     CCTK_VERROR(
         "MCNuX::enable_emission = yes is incompatible with "

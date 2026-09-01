@@ -48,7 +48,7 @@ CCTK_INT mcnux_transport_diag TYPE=SCALAR
 # Not checkpointed: the battery is recomputed from nothing but code, so it is
 # not part of any evolved state.
 
-CCTK_REAL mcnux_selftest TYPE=ARRAY DIM=1 SIZE=166 DISTRIB=CONSTANT TAGS='checkpoint="no"'
+CCTK_REAL mcnux_selftest TYPE=ARRAY DIM=1 SIZE=170 DISTRIB=CONSTANT TAGS='checkpoint="no"'
 {
   selftest_error
   selftest_pass
@@ -147,6 +147,25 @@ CCTK_REAL mcnux_stats_diag TYPE=ARRAY DIM=1 SIZE=14 DISTRIB=CONSTANT TAGS='check
 {
   stats_estimate stats_expected stats_sigma stats_z
 } "MCNuX statistical-check verdicts (estimate, expected, standard error, standardized deviation z per check)"
+
+# Statistical-check verdict table of the `stats-beam` benchmark
+# ([MCNX-INT-01]/[MCNX-INT-03] beam attenuation of
+# specs/neutrino-matter-interactions.md:197-200; [MCNX-VER-07]). The
+# mcnux_stats_diag shape (same four estimate/expected/sigma/z columns —
+# distinct variable names because Cactus variable names are unique per
+# implementation), one row per check; the row layout (0 = transmitted count
+# vs N_p exp(-kappa_a L), binomial sigma; 1 = exact transmitted + absorbed
+# count closure at sigma = 1) is owned by, and documented in,
+# src/mcnux_interactions.cxx (MCNuX_StatsBeam), which cross-checks SIZE
+# against its own row count at runtime. Acceptance |z| <= 4 is judged once
+# at golden capture; thereafter the archived z values are golden numbers
+# diffed at 1e-12. Storage is parameter-gated (schedule.ccl); not
+# checkpointed: the table is recomputed from the run tallies every fill.
+
+CCTK_REAL mcnux_stats_beam_diag TYPE=ARRAY DIM=1 SIZE=2 DISTRIB=CONSTANT TAGS='checkpoint="no"'
+{
+  sbeam_estimate sbeam_expected sbeam_sigma sbeam_z
+} "MCNuX stats-beam statistical-check verdicts (estimate, expected, standard error, standardized deviation z per check)"
 
 # Per-species escape-tally diagnostic table
 # (specs/particle-container-and-gpu.md [MCNX-GPU-05]: packets that leave the

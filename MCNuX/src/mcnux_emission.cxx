@@ -43,6 +43,7 @@
 #include "mcnux_srcterms.hxx"
 #include "mcnux_stats.hxx"
 #include "mcnux_stats_emission.hxx"
+#include "mcnux_stats_writer.hxx"
 #include "mcnux_table_range.hxx"
 #include "mcnux_tetrad.hxx"
 #include "mcnux_trp.hxx"
@@ -668,18 +669,15 @@ extern "C" void MCNuX_StatsEmission(CCTK_ARGUMENTS) {
                 "(MCNuX/interface.ccl)",
                 nrows, expected_rows);
 
-  for (int r = 0; r < nrows; ++r) {
-    stats_estimate[r] = 0.0;
-    stats_expected[r] = 0.0;
-    stats_sigma[r] = 0.0;
-    stats_z[r] = 0.0;
-  }
+  // The shared stats-writer scaffold (mcnux_stats_writer.hxx): zero fill +
+  // per-row ZScore mirror; the log line stays here (the row meaning is owned
+  // by this writer).
+  const StatsDiagView view{stats_estimate, stats_expected, stats_sigma,
+                           stats_z, nrows};
+  view.zero_fill();
 
   const auto put = [&](int r, const ZScore &zs) {
-    stats_estimate[r] = zs.estimate;
-    stats_expected[r] = zs.expected;
-    stats_sigma[r] = zs.sigma;
-    stats_z[r] = zs.z;
+    view.put(r, zs);
     CCTK_VINFO("MCNuX stats-emission row %2d: estimate = %.17g, "
                "expected = %.17g, sigma = %.17g, z = %.17g  %s",
                r, zs.estimate, zs.expected, zs.sigma, zs.z,

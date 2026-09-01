@@ -303,6 +303,47 @@ BOOLEAN test_stats_emission "Reduce the emission step into (estimate, expected, 
 {
 } "no"
 
+# Beam-attenuation benchmark switch of specs/neutrino-matter-interactions.md
+# ([MCNX-INT-01]/[MCNX-INT-03] Verification: beam attenuation, statistical,
+# 4 sigma) and specs/verification-suite-design.md [MCNX-VER-07] (the
+# `stats-beam` benchmark): MCNuX::test_stats_beam = yes seeds the
+# deterministic collimated monoenergetic beam at initial time
+# (MCNuX_SeedBeamPackets: beam_num_packets nu_e packets at the seed plane
+# beam_x0 with identical +x null momenta, no RNG consumed), turns on storage
+# for the MCNuX::mcnux_stats_beam_diag verdict table, and schedules
+# MCNuX_StatsBeam after the episode driver, reducing the run into the
+# transmitted-count-vs-exp(-kappa_a L) check row and the exact count-closure
+# row. Off by default — verification scaffolding — and STEERABLE=NEVER,
+# because the table's storage and the routines' scheduling are decided from
+# it at startup. MCNuX_ParamCheck requires enable_interactions with it (the
+# episode driver IS the absorber) and forbids it with enable_emission and
+# test_synthetic_packets (id-collision / duplicate-seeder hazards).
+
+BOOLEAN test_stats_beam "Seed the deterministic beam fixture and reduce the run into the beam-attenuation statistical check rows" STEERABLE=NEVER
+{
+} "no"
+
+# Beam fixture controls (ignored unless test_stats_beam = yes; all
+# STEERABLE=NEVER — the fixture is written once at initial time and golden
+# data depends on it). The packet-count default is the pinned statistical
+# N_p = 2^20 of [MCNX-RNG-07] (stats_default_num_packets, mcnux_stats.hxx);
+# a benchmark pinning a different value documents it in its parfile.
+
+CCTK_INT beam_num_packets "Number of beam packets (default: the pinned statistical N_p = 2^20 of [MCNX-RNG-07])" STEERABLE=NEVER
+{
+  1:* :: "at least one packet"
+} 1048576
+
+CCTK_REAL beam_energy_MeV "Beam packet energy [MeV] (monoenergetic; the attenuation law is energy-independent for gray kappa_a0)" STEERABLE=NEVER
+{
+  (0:* :: "positive beam energy [MeV]"
+} 10.0
+
+CCTK_REAL beam_x0 "Seed-plane x coordinate of the beam [code units]; the slab thickness is L = x_hi - beam_x0" STEERABLE=NEVER
+{
+  *:* :: "must lie inside the domain (checked at seeding; keep it off the x_lo face)"
+} -0.875
+
 # The run's base RNG seed S of specs/rng-and-reproducibility.md: every
 # emission draw is an evaluation of the pure u(S, q, e, k) of mcnux_rng.hxx
 # at this S. The default is the pinned primary statistics seed

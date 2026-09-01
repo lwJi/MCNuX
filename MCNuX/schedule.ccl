@@ -140,6 +140,25 @@ if (test_synthetic_packets)
   } "Seed the deterministic synthetic packet fixture"
 }
 
+# Beam seeding fixture of the `stats-beam` benchmark
+# ([MCNX-INT-01]/[MCNX-INT-03] beam attenuation; parameter-gated by
+# MCNuX::test_stats_beam): seed the deterministic collimated beam once AT
+# initial, after ODESolvers_Initial (the SeedSyntheticPackets slot — the
+# population must exist before the first transport step). Global mode: the
+# seeder touches no grid variables at all (deterministic index arithmetic,
+# no per-packet diagnostic table, geometry reached through ghext), so it
+# carries no READS:/WRITES: clauses ([MCNX-CTX-04] — the packet container is
+# not a grid variable).
+
+if (test_stats_beam)
+{
+  SCHEDULE MCNuX_SeedBeamPackets AT initial AFTER ODESolvers_Initial
+  {
+    LANG: C
+    OPTIONS: global
+  } "Seed the deterministic collimated monoenergetic beam fixture"
+}
+
 # The plain push runs only when the episode driver does not: the driver
 # occupies the same slot and subsumes the push (it advances every packet by
 # the full transport dt across its episode segments), so scheduling both
@@ -217,6 +236,40 @@ if (enable_interactions && !test_synthetic_packets)
     WRITES: MCNuX::rad_force(everywhere)
     WRITES: MCNuX::lepton_source(everywhere)
   } "Run the per-packet sampling-episode loop (competition + elastic scattering) over one transport step"
+}
+
+# Statistical-reduction writer of the `stats-beam` benchmark
+# ([MCNX-INT-01]/[MCNX-INT-03] beam attenuation of
+# specs/neutrino-matter-interactions.md:197-200; [MCNX-VER-07];
+# parameter-gated by MCNuX::test_stats_beam): reduce the episode driver's
+# pure-absorber beam run into the (estimate, expected, sigma, z) rows of the
+# MCNuX::mcnux_stats_beam_diag table. The AT initial leg defines iteration-0
+# output (zero fill — no transport has run); the in-step leg runs AFTER
+# MCNuX_EpisodeDriver, i.e. after the step's escape/absorption tallies have
+# been folded into the run accumulators it reads. Modes mirror the
+# MCNuX_StatsEmission pair ([MCNX-CTX-03]); the routine reads no grid
+# functions — the self pair on the verdict table is its complete
+# grid-variable footprint ([MCNX-CTX-04]; the tallies are TU-local state in
+# mcnux_escape.cxx / mcnux_interactions.cxx, not grid variables).
+
+if (test_stats_beam)
+{
+  STORAGE: mcnux_stats_beam_diag
+
+  SCHEDULE MCNuX_StatsBeam AT initial AFTER ODESolvers_Initial
+  {
+    LANG: C
+    OPTIONS: global
+    WRITES: MCNuX::mcnux_stats_beam_diag(everywhere)
+  } "Fill the beam statistical-check verdict table (initial data: zero fill)"
+
+  SCHEDULE MCNuX_StatsBeam IN MCNuX_TransportStep AFTER MCNuX_EpisodeDriver
+  {
+    LANG: C
+    OPTIONS: level
+    READS: MCNuX::mcnux_stats_beam_diag(everywhere)
+    WRITES: MCNuX::mcnux_stats_beam_diag(everywhere)
+  } "Reduce the beam run into (estimate, expected, sigma, z) statistical check rows"
 }
 
 # Runtime id-contract check of specs/particle-container-and-gpu.md

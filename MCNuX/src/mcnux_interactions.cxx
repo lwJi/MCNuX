@@ -56,6 +56,9 @@
 #include "mcnux_interactions.hxx"
 #include "mcnux_particles.hxx"
 #include "mcnux_srcterms.hxx"
+#include "mcnux_stats.hxx"
+#include "mcnux_stats_beam.hxx"
+#include "mcnux_stats_writer.hxx"
 #include "mcnux_table_range.hxx"
 #include "mcnux_tetrad.hxx"
 #include "mcnux_trp.hxx"
@@ -90,6 +93,12 @@ LedgerAudit g_interaction_audit{};
 // a cell face moving toward it — measure-zero off contrived fixtures), and
 // the cap turns even that into a plain break instead of a device-side hang.
 constexpr int max_episodes_per_step = 10000;
+
+// Run-cumulative absorption-event count (the escape_run_tally() mechanism:
+// per-step += at the audit fold below, never reset). Consumer:
+// MCNuX_StatsBeam's exact count-closure row — with a single-species
+// pure-absorber beam the single scalar is the whole absorbed tally.
+double g_absorbed_run_count = 0.0;
 
 } // namespace
 
@@ -448,6 +457,7 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
                           audit_host[3], audit_host[4]};
   audit.gross = LedgerDelta{audit_host[5], audit_host[6], audit_host[7],
                             audit_host[8], audit_host[9]};
+  g_absorbed_run_count += audit_host[13]; // run-cumulative (stats-beam)
 
   // Fold the step's escapes into the run-cumulative tally ([MCNX-GPU-05];
   // NOT part of the ledger audit above — escapes deposit nothing and never
@@ -567,6 +577,92 @@ extern "C" void MCNuX_IdContractCheck(CCTK_ARGUMENTS) {
   CCTK_VINFO("MCNuX id-contract check: %zu live, %zu ever live, %zu retired "
              "(all [MCNX-GPU-04] assertions passed)",
              prev_live.size(), ever_live.size(), retired.size());
+}
+
+// ---------------------------------------------------------------------------
+// Statistical-reduction writer  (MCNuX::mcnux_stats_beam_diag)
+// ---------------------------------------------------------------------------
+// The `stats-beam` benchmark writer ([MCNX-INT-01]/[MCNX-INT-03],
+// specs/neutrino-matter-interactions.md:197-200; [MCNX-VER-07],
+// verification-suite-design.md:265): reduce the episode driver's
+// pure-absorber beam step into (estimate, expected, sigma, z) rows through
+// the frozen MCNuX::zscore() (called verbatim, never reimplemented) and the
+// shared StatsDiagView scaffold. Sigma formulas are benchmark-owned
+// (mcnux_stats_beam.hxx), never added to mcnux_stats.hxx (its binding
+// non-goal). Acceptance |z| <= 4 is judged once at golden capture;
+// thereafter the archived z values are golden numbers diffed at 1e-12.
+//
+// Row layout (SIZE=2):
+//   0  transmitted packet count vs N_p exp(-kappa_a L): estimate = the
+//      [MCNX-GPU-05] escape-tally count of the beam species (nu_e — with
+//      kappa_s = 0 every non-absorbed packet provably reaches the far face:
+//      the Dt_s = +inf branch of interaction_time), expected = N_p p with
+//      p = p_transmission(kappa_code, L_code), sigma = sqrt(N_p p (1 - p))
+//      (binomial; mcnux_stats_beam.hxx). kappa_code comes from kappa_a0[0]
+//      (cgs cm^-1) via opacity_cgs_to_code — never a retyped literal — and
+//      L_code = x_hi - beam_x0 from the SAME level geometry whose
+//      (prob_lo, prob_hi) drive the driver's outside_domain escape check.
+//   1  exact count closure: estimate = transmitted + absorbed,
+//      expected = N_p, sigma = 1.0 — so z is the raw packet discrepancy
+//      (0 at closure; sigma = 1 avoids the sigma = 0 z pathology of an
+//      exact check). The [MCNX-INT-03] discreteness observable: every
+//      packet is resolved whole, absorbed-or-escaped, within the step.
+//
+// Both tallies are RUN-CUMULATIVE (escape_run_tally() and
+// g_absorbed_run_count above), which equals the per-step value here: the
+// benchmark runs exactly ONE transport step. The AT initial leg keeps the
+// deterministic zero fill (no transport has run).
+extern "C" void MCNuX_StatsBeam(CCTK_ARGUMENTS) {
+  DECLARE_CCTK_ARGUMENTS_MCNuX_StatsBeam;
+  DECLARE_CCTK_PARAMETERS;
+
+  require_driver();
+
+  constexpr int expected_rows = 2;
+  const int nrows = diag_array_size("MCNuX::mcnux_stats_beam_diag");
+  if (nrows != expected_rows)
+    CCTK_VERROR("MCNuX::mcnux_stats_beam_diag has SIZE=%d but MCNuX_StatsBeam "
+                "writes %d check rows; the two must agree "
+                "(MCNuX/interface.ccl)",
+                nrows, expected_rows);
+
+  const StatsDiagView view{sbeam_estimate, sbeam_expected, sbeam_sigma,
+                           sbeam_z, nrows};
+  view.zero_fill();
+
+  const auto put = [&](int r, const ZScore &zs) {
+    view.put(r, zs);
+    CCTK_VINFO("MCNuX stats-beam row %d: estimate = %.17g, expected = %.17g, "
+               "sigma = %.17g, z = %.17g  %s",
+               r, zs.estimate, zs.expected, zs.sigma, zs.z,
+               zs.pass ? "PASS" : "FAIL");
+  };
+
+  // In-step only (the AT initial leg keeps the zero fill above).
+  if (cctk_iteration > 0) {
+    // Slab length along the beam: the far x face minus the seed plane, on
+    // the patch-0 level-0 geometry (single-patch unigrid benchmark; the
+    // driver's escape predicate uses the same ProbLo/ProbHi).
+    const amrex::Geometry &geom =
+        CarpetX::ghext->patchdata.at(0).amrcore->Geom(0);
+    const double L_code = geom.ProbHi(0) - beam_x0;
+    const double kappa_code = opacity_cgs_to_code(kappa_a0[0]);
+    if (!(kappa_code > 0.0) || !(L_code > 0.0))
+      CCTK_VERROR("MCNuX stats-beam needs kappa_a0[0] > 0 and beam_x0 < x_hi "
+                  "(got kappa_code = %.17g, L_code = %.17g): a degenerate "
+                  "transmission probability p in {0, 1} has sigma = 0 and no "
+                  "statistical content ([MCNX-VER-07])",
+                  kappa_code, L_code);
+
+    const double N_p = double(beam_num_packets);
+    const double p = p_transmission(kappa_code, L_code);
+    const double transmitted =
+        escape_run_tally().v[escape_slot(0, escape_channel_count)];
+    const double absorbed = g_absorbed_run_count;
+
+    put(0, zscore(transmitted, N_p * p, sigma_beam_transmission(N_p, p)));
+    put(1, zscore(transmitted + absorbed, N_p, 1.0));
+  }
 }
 
 } // namespace MCNuX
