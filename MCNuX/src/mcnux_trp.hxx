@@ -33,18 +33,31 @@
 //   kappa_a' + kappa_s' = kappa_a + kappa_s   (total interaction rate /
 //                                              diffusion timescale unmodified)
 //
-// Out of scope here (later tasks): the per-cell alpha SELECTION rule
-// alpha = min(1, xi/(kappa_a Dt_c)) and the kappa_a' Dt_c <= xi diagnostic
-// ([MCNX-TRP-04] control plumbing), and the alpha -> 1 bitwise-limit
-// benchmark ([MCNX-TRP-05]). The alpha in (0, 1] range is the corpus's
-// recorded assumption (trapped-regime-treatment.md, "Open questions");
-// enforcement is paramcheck's job, not this pure map's.
+// This header also owns the [MCNX-TRP-04] practical control (the binding
+// selection rule of trapped-regime-treatment.md:145-171):
+//
+//   alpha = min(1, xi / (kappa_a Dt_c))     so kappa_a' Dt_c <= xi by
+//                                           construction
+//
+// with kappa_a the UNPRIMED absorption opacity and Dt_c the cell
+// light-crossing time in MUTUALLY CONSISTENT units (the runtime feeds
+// code-unit kappa_a against code-unit Dt_c = min_d dx_d; c = 1). Only the
+// kappa_a' Dt_c <= xi bound binds; the beta-dependent Eq. 50 bound is an
+// explicitly deferred open question (spec :450-455). The fixed-alpha
+// override of [MCNX-TRP-05] (TrpParams::alpha_fixed below) may replace the
+// rule for verification runs. Out of scope here (later tasks): the alpha ->
+// 1 bitwise-limit benchmark itself ([MCNX-TRP-05]) and the diffusion scheme
+// ([MCNX-TRP-06..10]). The alpha in (0, 1] range is the corpus's recorded
+// assumption (trapped-regime-treatment.md, "Open questions"); enforcement is
+// the param.ccl range clause's job, not this pure map's.
 //
 // Deliberately free of cctk.h, AMReX, and CarpetX includes: plain portable
 // constexpr C++ so that host code, device code, and the self-test battery
 // can all include it (the mcnux_units.hxx pattern).
 
 #include "mcnux_units.hxx"
+
+#include <type_traits>
 
 namespace MCNuX {
 
@@ -62,6 +75,34 @@ constexpr RelabeledCoefficients relabel(double eta, double kappa_a,
                                         double alpha) noexcept {
   return {alpha * eta, alpha * kappa_a, kappa_s + (1.0 - alpha) * kappa_a};
 }
+
+// The [MCNX-TRP-04] alpha-selection rule, alpha = min(1, xi/(kappa_a Dt_c)),
+// on the UNPRIMED kappa_a with kappa_a and Dt_c in mutually consistent units
+// (the runtime uses code units on both). Branch form rather than a min()
+// over a quotient: the clamp branch returns EXACTLY 1.0 (the [MCNX-TRP-05]
+// identity endpoint), and kappa_a = 0 (a transparent cell) lands on it with
+// no division — the "optically thin cells yield alpha = 1 automatically"
+// clause of the spec. By construction the selected alpha gives
+// kappa_a' Dt_c = alpha kappa_a Dt_c <= xi (asserted below). xi > 0 is the
+// param.ccl range clause's job, never checked here.
+constexpr double alpha_select(double kappa_a_code, double dt_c,
+                              double xi) noexcept {
+  const double x = kappa_a_code * dt_c;
+  return (x <= xi) ? 1.0 : xi / x;
+}
+
+// Runtime parameter bundle of the relabeling scheme (trapped_scheme, trp_xi,
+// trp_alpha_fixed of param.ccl, read once at startup by
+// trp_params_from_parameters() in mcnux_coefficients.cxx). alpha_fixed < 0
+// (the -1 parameter sentinel) means "use the selection rule"; alpha_fixed in
+// (0, 1] is the [MCNX-TRP-05] fixed-alpha verification override. Plain
+// aggregate so it is trivially copyable into device kernels by value (the
+// AnalyticOpacityParams precedent of mcnux_coefficients.hxx).
+struct TrpParams {
+  bool relabeled;     // trapped_scheme = "relabeled"
+  double xi;          // the kappa_a' Dt_c <= xi control, typically 1
+  double alpha_fixed; // -1 sentinel = use the selection rule
+};
 
 // ---------------------------------------------------------------------------
 // Compile-time verification — the [MCNX-TRP-02] invariants, the
@@ -137,6 +178,45 @@ static_assert(detail::trpfix_a100.eta_p == detail::trpfix_eta &&
                   detail::trpfix_a100.kappa_a_p == detail::trpfix_ka &&
                   detail::trpfix_a100.kappa_s_p == detail::trpfix_ks,
               "alpha = 1 must reproduce the unprimed coefficients exactly");
+
+// ---------------------------------------------------------------------------
+// [MCNX-TRP-04] alpha_select fixtures (exact binary fractions throughout).
+// ---------------------------------------------------------------------------
+
+// Clamp branch: kappa_a Dt_c <= xi gives exactly 1.0 — strictly below the
+// bound, exactly ON it, and at kappa_a = 0 (transparent cell, no division).
+static_assert(alpha_select(0.5, 0.25, 1.0) == 1.0 &&
+                  alpha_select(2.0, 0.5, 1.0) == 1.0 &&
+                  alpha_select(0.0, 0.25, 1.0) == 1.0,
+              "[MCNX-TRP-04] alpha_select must clamp to exactly 1 for "
+              "kappa_a Dt_c <= xi, including kappa_a = 0");
+
+// Scaling branch: kappa_a Dt_c > xi gives alpha = xi/(kappa_a Dt_c) exactly
+// (binary-fraction fixture: kappa_a Dt_c = 8, xi = 1 -> alpha = 0.125; and
+// the xi-scaling: doubling xi doubles alpha on this branch).
+static_assert(alpha_select(16.0, 0.5, 1.0) == 0.125 &&
+                  alpha_select(16.0, 0.5, 2.0) == 0.25,
+              "[MCNX-TRP-04] alpha_select must return xi/(kappa_a Dt_c) on "
+              "the scaling branch, linear in xi");
+
+// The bound the rule exists to enforce: kappa_a' Dt_c = alpha kappa_a Dt_c
+// <= xi with the selected alpha, on both branches (the relabel composition).
+static_assert(relabel(0.0, 0.5, 0.0, alpha_select(0.5, 0.25, 1.0)).kappa_a_p *
+                      0.25 <=
+                  1.0,
+              "[MCNX-TRP-04] kappa_a' Dt_c <= xi must hold on the clamp "
+              "branch");
+static_assert(relabel(0.0, 16.0, 0.0, alpha_select(16.0, 0.5, 1.0)).kappa_a_p *
+                      0.5 <=
+                  1.0,
+              "[MCNX-TRP-04] kappa_a' Dt_c <= xi must hold on the scaling "
+              "branch");
+
+// Device-capturable layout of the parameter bundle (the
+// AnalyticOpacityParams precedent).
+static_assert(std::is_trivially_copyable<TrpParams>::value,
+              "TrpParams must be trivially copyable (captured by value into "
+              "device kernels)");
 
 } // namespace MCNuX
 

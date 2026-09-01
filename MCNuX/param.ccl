@@ -190,6 +190,58 @@ BOOLEAN enable_interactions "Run the sampling-episode driver (interaction compet
 {
 } "no"
 
+# Trapped-regime scheme selector of specs/trapped-regime-treatment.md
+# ([MCNX-TRP-01/02]; spec :81): "explicit" is the unmodified baseline (no
+# relabeling anywhere — every pre-existing benchmark's golden data is a run
+# of this branch); "relabeled" substitutes the primed coefficients
+#   eta' = alpha eta, kappa_a' = alpha kappa_a,
+#   kappa_s' = kappa_s + (1 - alpha) kappa_a
+# (the BINDING 2021 alpha convention of [MCNX-TRP-03], mcnux_trp.hxx) into
+# the emission count law and the event-sampling law — and nowhere else;
+# tallies remain the actual packet events. alpha per (cell, species, energy
+# bin) comes from the [MCNX-TRP-04] selection rule (trp_xi below) unless
+# trp_alpha_fixed overrides it. STEERABLE=NEVER: the drivers capture the
+# scheme once at startup (TrpParams of mcnux_trp.hxx). MCNuX_ParamCheck
+# forbids "relabeled" with opacity_source = "table" (no table-residency
+# layer exists, the enable_emission/enable_interactions precedent).
+
+KEYWORD trapped_scheme "Trapped-regime treatment (specs/trapped-regime-treatment.md [MCNX-TRP-01/02])" STEERABLE=NEVER
+{
+  "explicit"  :: "unmodified coefficients (the baseline scheme)"
+  "relabeled" :: "opacity relabeling with the [MCNX-TRP-04] alpha selection"
+} "explicit"
+
+# The xi control of the [MCNX-TRP-04] alpha-selection rule
+# (specs/trapped-regime-treatment.md:145-171, provenance arXiv:2103.16588):
+# alpha = min(1, xi/(kappa_a Dt_c)) per (cell, species, energy bin), with
+# kappa_a the UNPRIMED code-unit absorption opacity and Dt_c the cell
+# light-crossing time (min_d dx_d in code units, c = 1), so that
+# kappa_a' Dt_c <= xi by construction — the only binding stability control
+# (the beta-dependent Eq. 50 bound is an explicitly deferred open question,
+# spec :450-455). Typically xi = 1 (the spec's stated practice). Ignored
+# unless trapped_scheme = "relabeled", or when trp_alpha_fixed overrides the
+# rule. STEERABLE=NEVER: captured once at startup.
+
+CCTK_REAL trp_xi "Relabeled-scheme stability control xi of alpha = min(1, xi/(kappa_a Dt_c)) (specs/trapped-regime-treatment.md [MCNX-TRP-04])" STEERABLE=NEVER
+{
+  (0:* :: "positive stability control"
+} 1.0
+
+# Fixed-alpha verification override of specs/trapped-regime-treatment.md
+# [MCNX-TRP-04]/[MCNX-TRP-05]: a value in (0, 1] replaces the selection rule
+# with that constant alpha everywhere (alpha = 1 is the exact-identity
+# endpoint the [MCNX-TRP-05] bitwise limit benchmark pins); the default -1
+# sentinel selects the rule. The (0, 1] range clause IS the corpus's
+# alpha-range rejection (spec :443-449; Cactus enforces parameter ranges at
+# parse time). Ignored unless trapped_scheme = "relabeled". STEERABLE=NEVER:
+# captured once at startup.
+
+CCTK_REAL trp_alpha_fixed "Fixed-alpha override of the [MCNX-TRP-04] selection rule (-1 = use the rule; verification use, [MCNX-TRP-05])" STEERABLE=NEVER
+{
+  -1:-1 :: "sentinel: use the alpha-selection rule"
+  (0:1] :: "fixed retained-fraction alpha (2021 convention, [MCNX-TRP-03])"
+} -1.0
+
 # Runtime id-contract check of specs/particle-container-and-gpu.md
 # [MCNX-GPU-04] (the `absorb-smoke` benchmark): MCNuX::test_id_contract =
 # yes schedules MCNuX_IdContractCheck once per transport step after the

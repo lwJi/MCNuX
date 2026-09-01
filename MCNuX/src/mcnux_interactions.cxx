@@ -58,6 +58,7 @@
 #include "mcnux_srcterms.hxx"
 #include "mcnux_table_range.hxx"
 #include "mcnux_tetrad.hxx"
+#include "mcnux_trp.hxx"
 #include "mcnux_units.hxx"
 
 #include <AMReX_AmrParGDB.H> // completes AmrParGDB (mcnux_geodesic.cxx note)
@@ -69,6 +70,7 @@
 #include <cctk_Arguments.h>
 #include <cctk_Parameters.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <set>
@@ -104,11 +106,14 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
   // safe because MCNuX_ParamCheck forbids enable_interactions with
   // opacity_source = "table", so the Analytic branch of
   // evaluate_coefficients never invokes it; its clamp counters stay null
-  // (host counters are not device-safe). [MCNX-INT-05]: this single narrow
-  // evaluate_coefficients expression is where the trapped-regime relabeling
-  // of mcnux_trp.hxx substitutes in a later task.
+  // (host counters are not device-safe). [MCNX-INT-05]: the single narrow
+  // evaluate_coefficients expression below is where the trapped-regime
+  // relabeling of mcnux_trp.hxx substitutes (event-sampling law only,
+  // [MCNX-TRP-02]) when trapped_scheme = "relabeled"; with the default
+  // explicit scheme the sampling expressions are byte-for-byte the baseline.
   const CoefficientSource src = selected_coefficient_source();
   const AnalyticOpacityParams ap = analytic_params_from_parameters();
+  const TrpParams trp = trp_params_from_parameters();
   const RangedTableCoefficients table_eval{};
 
   const std::uint64_t S = static_cast<std::uint64_t>(rng_seed);
@@ -149,6 +154,13 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
         make_gather(patchdata, leveldata, mgroups, pti);
     const CellFluidGather fgather =
         make_fluid_gather(patchdata, leveldata, hgroups, pti);
+
+    // Cell light-crossing time of the [MCNX-TRP-04] alpha selection: code
+    // units with c = 1, so Dt_c = min_d dx_d. Uniform over the tile (one
+    // level's geometry), computed host-side and captured by value; consumed
+    // only on the relabeled branch below.
+    const double trp_dt_c =
+        std::min(fgather.dx[0], std::min(fgather.dx[1], fgather.dx[2]));
 
     // Source views of the SAME box: CarpetX builds the group MultiFabs on
     // the AmrCore's BoxArray/DistributionMapping — the ones the ParGDB
@@ -262,14 +274,38 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
         const double kappa_s_code = opacity_cgs_to_code(co.kappa_s);
         const double kappa_a_code = opacity_cgs_to_code(co.kappa_a);
 
+        // Trapped-regime relabeling ([MCNX-TRP-02], event-sampling law
+        // substitution point): with trapped_scheme = "relabeled", alpha per
+        // (cell, species, energy bin) is the [MCNX-TRP-04] selection rule on
+        // the UNPRIMED code-unit kappa_a (or the fixed-alpha override), and
+        // the primed pair feeds the two interaction_time draws below —
+        // NOWHERE else: the RNG draw sites are scheme-independent (the
+        // [MCNX-TRP-05] alpha = 1 bitwise obligation), and every deposit,
+        // audit, and tally keeps the actual fired event's quantities. On the
+        // default explicit branch these are bitwise copies (zero FP ops).
+        double kappa_a_samp = kappa_a_code;
+        double kappa_s_samp = kappa_s_code;
+        if (trp.relabeled) {
+          const double alpha =
+              (trp.alpha_fixed > 0.0)
+                  ? trp.alpha_fixed
+                  : alpha_select(kappa_a_code, trp_dt_c, trp.xi);
+          // Map by NAME (RelabeledCoefficients field order differs from
+          // Coefficients); the eta slot is unused in the sampling law.
+          const RelabeledCoefficients rc =
+              relabel(0.0, kappa_a_code, kappa_s_code, alpha);
+          kappa_a_samp = rc.kappa_a_p;
+          kappa_s_samp = rc.kappa_s_p;
+        }
+
         // (4) [MCNX-INT-06]: both channel draws ALWAYS consumed; the
         // cell-exit bound uses the FROZEN episode-start coordinate velocity
         // and the episode cell's faces from above.
         const EpisodeUniforms eu = episode_uniforms(S, q, e);
         const double dt_s =
-            interaction_time(eu.u_s, pt_up, kappa_s_code, nu_code);
+            interaction_time(eu.u_s, pt_up, kappa_s_samp, nu_code);
         const double dt_a =
-            interaction_time(eu.u_a, pt_up, kappa_a_code, nu_code);
+            interaction_time(eu.u_a, pt_up, kappa_a_samp, nu_code);
         // The exit bound is inflated by a few ulps (an implementation-
         // freedom choice like the entry adjustment above): the RK4 segment
         // of an exactly-computed dt_exit can land roundoff-SHORT of the

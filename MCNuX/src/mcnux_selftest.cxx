@@ -316,6 +316,25 @@
 //                                                 {count, Sum N, Sum N p^t}
 //                                                 on a two-species hand
 //                                                 fixture, exact)
+// 162       trp.select.clamp_at_one               [MCNX-TRP-04] (alpha_select
+//                                                 == 1.0 exactly for
+//                                                 kappa_a Dt_c <= xi, incl.
+//                                                 kappa_a = 0 and the exact
+//                                                 boundary)
+// 163       trp.select.xi_scaling_exact           [MCNX-TRP-04] (scaling
+//                                                 branch reproduces
+//                                                 xi/(kappa_a Dt_c) bitwise;
+//                                                 exact-fraction anchors)
+// 164       trp.select.kappa_ap_dtc_bound         [MCNX-TRP-04] (the
+//                                                 constructive invariant
+//                                                 kappa_a' Dt_c <= xi over
+//                                                 the alpha_select -> relabel
+//                                                 composition sweep)
+// 165       trp.select.fixed_alpha_override       [MCNX-TRP-04/05] (positive
+//                                                 alpha_fixed bypasses the
+//                                                 rule; alpha = 1 identity
+//                                                 endpoint; -1 sentinel
+//                                                 selects the rule)
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -466,6 +485,15 @@ void run_battery(Battery &b) {
   // accumulation) through the mcnux_escape.hxx pure functions on exact
   // binary-fraction fixtures.
   append_escape_rows(b);
+
+  // Rows 162..165 — the [MCNX-TRP-04] alpha-selection rule of
+  // specs/trapped-regime-treatment.md:145-171 through the mcnux_trp.hxx
+  // alpha_select pure function on pinned (kappa_a, Dt_c, xi) fixtures:
+  // clamp-at-1 branch (incl. kappa_a = 0 and the exact boundary), bitwise
+  // xi/(kappa_a Dt_c) scaling branch, the constructive kappa_a' Dt_c <= xi
+  // invariant through relabel, and the [MCNX-TRP-05] fixed-alpha override
+  // path.
+  append_trp_select_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.

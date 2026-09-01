@@ -51,6 +51,19 @@ extern "C" void MCNuX_ParamCheck(CCTK_ARGUMENTS) {
         "driver's RangedTableCoefficients slot has no live table views to "
         "evaluate ([MCNX-OPA-04]). Use the analytic coefficient source, or "
         "disable interactions.");
+  // Trapped-regime guard (specs/trapped-regime-treatment.md [MCNX-TRP-02]):
+  // the relabeled scheme's alpha selection reads the unprimed kappa_a off
+  // the coefficient interface, and no table-residency layer exists — the
+  // same no-live-table-views reason as the emission/interactions guards
+  // above.
+  if (CCTK_EQUALS(trapped_scheme, "relabeled") &&
+      CCTK_EQUALS(opacity_source, "table"))
+    CCTK_VERROR(
+        "MCNuX::trapped_scheme = \"relabeled\" requires "
+        "MCNuX::opacity_source = \"analytic\": no table-residency layer "
+        "exists yet, so the relabeling's alpha selection has no live table "
+        "views from which to read the unprimed kappa_a ([MCNX-OPA-04]). Use "
+        "the analytic coefficient source, or keep the explicit scheme.");
   // Ledger-closure auditability guard ([MCNX-HYD-05]): the synthetic-deposit
   // fixture normalizes with synthfix::dV * synthfix::dt = 0.5 while the real
   // emission contributor normalizes with the grid's cell volume times the

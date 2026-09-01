@@ -110,6 +110,7 @@ void append_cell_exit_rows(Battery &b);      // rows 140..145
 void append_scatter_rows(Battery &b);        // rows 146..149
 void append_stats_emission_rows(Battery &b); // rows 150..155
 void append_escape_rows(Battery &b);         // rows 156..161
+void append_trp_select_rows(Battery &b);     // rows 162..165
 
 } // namespace MCNuX
 

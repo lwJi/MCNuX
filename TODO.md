@@ -4,7 +4,7 @@ Current state, not greenfield: the core transport pipeline is built and verified
 
 ## Standing facts every item inherits
 
-- The selftest row table in `mcnux_selftest.cxx` is APPEND-ONLY; the next free row index is **162** (rows 0..161 occupied per `mcnux_selftest.cxx:347-469`). New checks go in a per-domain `mcnux_selftest_<domain>.cxx` with the appender declared in `mcnux_selftest.hxx`. Several tasks below append rows — each task claims the then-current next index at build time; never renumber.
+- The selftest row table in `mcnux_selftest.cxx` is APPEND-ONLY; the next free row index is **166** (rows 0..165 occupied; 162-165 claimed by the trp-select wiring task). New checks go in a per-domain `mcnux_selftest_<domain>.cxx` with the appender declared in `mcnux_selftest.hxx`. Several tasks below append rows — each task claims the then-current next index at build time; never renumber.
 - Golden TSVs are captured from sandbox harness runs, never hand-authored; the first run against an empty golden dir is the capture step. The harness diffs at ABSTOL=RELTOL=1e-12 (`MCNuX/test/test.ccl`, no per-test blocks).
 - Stats-tier sigma formulas live in benchmark-owned headers (precedent `mcnux_stats_emission.hxx`), never in `mcnux_stats.hxx`. Stats writers follow the `MCNuX_StatsEmission` pattern (`mcnux_emission.cxx:629-704`, schedule precedent `MCNuX/schedule.ccl:425-433`): per-species device accumulator → estimate/expected/sigma/z rows via `MCNuX::zscore`, 4σ bar, `stats_seed_primary=1296518744`, `stats_default_num_packets=1048576` (`mcnux_stats.hxx:58-68`).
 - The stats benchmarks below (stats-beam, stats-scatterbox, stats-equilibration, stats-diffusion, trp-overlap-consistency) all reuse `MCNuX::zscore` (`mcnux_stats.hxx:91-95`) + the writer/schedule pattern; the first one built (stats-beam) should factor a shared writer scaffold so the later ones don't quadruplicate it. Collectively they broaden [MCNX-RNG-07] coverage ("all stats-* benchmarks", `verification-suite-design.md:352`).
@@ -12,15 +12,15 @@ Current state, not greenfield: the core transport pipeline is built and verified
 
 ## Tier 1 — Trapped-regime wiring, first stats benchmarks, table residency
 
-- [ ] Wire trapped-regime relabeling + α-selection rule into the runtime [MCNX-TRP-02 completion, MCNX-TRP-04]
+- [x] Wire trapped-regime relabeling + α-selection rule into the runtime [MCNX-TRP-02 completion, MCNX-TRP-04]
   - spec: specs/trapped-regime-treatment.md:107-121 (substitute η′,κ_a′,κ_s′ "into emission/event sampling and nowhere else"), :145-171 (per-cell `α = min(1, ξ/(κ_a Δt_c))`, runtime ξ, scheme selector, fixed-α override); the spec's own resolutions at :463-557 are normative; the β-dependent Eq.50 bound (:450-455) is explicitly deferred — only `κ_a′Δt_c ≤ ξ` is binding
   - tests: new selftest rows (162+) in a new `mcnux_selftest_trp_select.cxx`: α-selection rule reproduction fixtures (clamp at 1, ξ scaling), fixed-α override behavior, and the `κ_a′Δt_c ≤ ξ` invariant check (specs/verification-suite-design.md:374); paramcheck/gate behavior for invalid selector combos if any; existing goldens must stay bitwise-identical when the scheme is deselected (default off)
-  - notes: the pure `relabel()` map exists and is fully verified (`mcnux_trp.hxx:60-64`, static_asserts :92-139, selftest rows 66-70) but is never called from any runtime driver — `mcnux_interactions.cxx:110-112` and `mcnux_emission.cxx` call unprimed `evaluate_coefficients()` only; no α/ξ/scheme-selector parameter exists anywhere in `param.ccl` (grep empty). Insertion points flagged in-code: `mcnux_interactions.cxx:104-112`, `mcnux_coefficients.hxx:51-58`, `mcnux_interactions.hxx:43-50`. Unblocks the alpha-limit pair and the equilibration relabeled leg.
+  - notes: DONE. `alpha_select()` + `TrpParams` in `mcnux_trp.hxx:88-105` (static_asserts :180-224); parameters `trapped_scheme` ("explicit" default) / `trp_xi` / `trp_alpha_fixed` (-1 sentinel, (0:1] range = corpus α-rejection) in `param.ccl:193-256`, glue `trp_params_from_parameters()` in `mcnux_coefficients.cxx:34-48`; paramcheck guard relabeled+table (`mcnux_paramcheck.cxx:54-66`, smoke-verified abort); driver wiring `mcnux_interactions.cxx:271-305` (primed pair feeds only the two `interaction_time()` calls; Δt_c = min tile dx; draw sites/deposits/audits untouched) and `mcnux_emission.cxx:293-315` (η′=α·η before `bin_integrated_eta`); selftest rows 162-165, unit-selftest golden re-captured (SIZE 166). 15/15 harness pass; 5 driver goldens bitwise identical with default; manual `trp_alpha_fixed=1` relabeled run reproduces explicit goldens bitwise, so the alpha-limit pair and the equilibration relabeled leg are unblocked and can build directly on `trp_alpha_fixed`.
 
 - [ ] `trp-alpha-limit-explicit` / `trp-alpha-limit-relabeled` benchmark pair [MCNX-TRP-05]
   - spec: specs/trapped-regime-treatment.md:173-181; specs/verification-suite-design.md:247,328-329,375
   - tests: two parfiles diffing against the **same** golden numbers (capture from the explicit run) at 1e-12 — bitwise α→1 identity; the algebraic endpoint is already covered by selftest row 70 (`trp.relabel.alpha_one_identity`); this task delivers the harness-level identity
-  - notes: depends on the relabeling-wiring task above. Equilibration-box background (TestMCNuX `initial_hydro = "equilibration box"`, writer already exists in `hydro_profiles.cxx`), analytic mode, single rank, same seed; relabeled parfile pins fixed-α override to α=1.
+  - notes: relabeling wiring is now in (see task above; `trp_alpha_fixed` exists and the α=1 bitwise identity was already smoke-verified on the `interactions-fixedseed` parfile). Equilibration-box background (TestMCNuX `initial_hydro = "equilibration box"`, writer already exists in `hydro_profiles.cxx`), analytic mode, single rank, same seed; relabeled parfile pins fixed-α override to α=1.
 
 - [ ] `stats-beam` statistical benchmark [MCNX-INT-01/-03, MCNX-VER-07]
   - spec: specs/neutrino-matter-interactions.md:197-201 (transmitted fraction = `exp(−κ_a L)` within 4σ); specs/verification-suite-design.md:265 (η_scale=0 pure-absorber slab)
@@ -117,3 +117,8 @@ Current state, not greenfield: the core transport pipeline is built and verified
 - Spec corrections resolved this plan run: the stale [MCNX-GPU-05] VER-06 matrix row in `verification-suite-design.md` now credits the built `escape-freestream` for the escape-tally clause (ownership-multibox keeps the placement clause). The reported wrong hex gloss of `stats_seed_primary` in `rng-and-statistical-acceptance.md:104` was checked and found already correct (0x4D474E58 = 1296518744) — no edit was needed.
 
 ## Discovered since last plan
+
+- [ ] Re-capture the `minkowski-freestream` golden on the current sandbox toolchain (bitwise-hygiene)
+  - spec: golden-capture policy (standing facts above; `MCNuX/test/test.ccl` ABSTOL/RELTOL=1e-12)
+  - tests: after re-capture, a repeat harness run reports "files identical" (bitwise) instead of "passed only to set tolerance"
+  - notes: pre-existing, PROVEN not caused by the trp-wiring change (stash-baseline rebuild+run at HEAD reproduces it): `mcnux-mcnux_packet_diag.it000004.x.tsv` has a 1-line ~1-ulp diff vs the committed golden on this sandbox — passes within tolerance but is the only non-bitwise test. Low cost, single golden file.

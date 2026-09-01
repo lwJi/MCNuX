@@ -65,6 +65,7 @@
 // cctk_Parameters.h for this interface.
 
 #include "mcnux_tetrad.hxx" // detail::pi
+#include "mcnux_trp.hxx"    // TrpParams (the trp_params_from_parameters decl)
 #include "mcnux_units.hxx"
 
 #include <cmath>
@@ -155,11 +156,15 @@ evaluate_coefficients(CoefficientSource src, const AnalyticOpacityParams &ap,
 
 // ---------------------------------------------------------------------------
 // Parameter glue (defined in mcnux_coefficients.cxx; reads
-// MCNuX::opacity_source, kappa_a0[], kappa_s0[], eta_scale[] of param.ccl).
+// MCNuX::opacity_source, kappa_a0[], kappa_s0[], eta_scale[], and the
+// trapped-regime trio trapped_scheme/trp_xi/trp_alpha_fixed of param.ccl).
+// The TrpParams accessor is declared here, not in mcnux_trp.hxx, so that
+// header stays cctk-free (its portable-constexpr contract).
 // ---------------------------------------------------------------------------
 
 CoefficientSource selected_coefficient_source();
 AnalyticOpacityParams analytic_params_from_parameters();
+TrpParams trp_params_from_parameters();
 
 // ---------------------------------------------------------------------------
 // Compile-time verification  [MCNX-VER-05] — only what is constexpr-checkable:

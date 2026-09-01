@@ -25,7 +25,7 @@ Headers:
 - `mcnux_particles.hxx` — pure-SoA `PacketContainer`; declares the packet-population accessors owned by `mcnux_geodesic.cxx`.
 - `mcnux_opacity.hxx` — WeakLibInterp call-boundary wrappers.
 - `mcnux_tetrad.hxx` — inverse metric, null closure, tetrad construction.
-- `mcnux_trp.hxx` — trapped-regime opacity relabeling map.
+- `mcnux_trp.hxx` — trapped-regime opacity relabeling map + α-selection rule (`alpha_select`, `TrpParams`; runtime glue `trp_params_from_parameters()` lives in `mcnux_coefficients.cxx`).
 - `mcnux_srcterms.hxx` — exchange-ledger arithmetic + closure audit (`LedgerAudit`/`ledger_closure`, shared `synthfix` synthetic event list).
 - `mcnux_coefficients.hxx` — source-agnostic coefficient interface, analytic Kirchhoff-form formulas, table-vs-analytic dispatch.
 - `mcnux_table_coeffs.hxx` — baseline table-source coefficient assembly + νx dataset mapping.
@@ -77,7 +77,7 @@ Compiled sources:
 
 ## Build & run
 
-- Build: `./agent_scripts/build.sh` from the repo root, inside the sandbox only (needs `$CACTUSX`/`$ETKCFG`, set by `agent_scripts/sandbox/setup.sh`; arrangement symlinks must exist). Incremental rebuilds take seconds. After a reverted/discarded task, stale objects can linger in `$CACTUSX/configs/mcnux/build/MCNuX/` (e.g. `.cxx/.cxx.d/.cxx.o` for deleted sources, or `.cxx.d` dependency files still naming a deleted/renamed *header* — "No rule to make target") and break the build — remove them (or clean-rebuild the thorn) before diagnosing further.
+- Build: `./agent_scripts/build.sh` from the repo root, inside the sandbox only (needs `$CACTUSX`/`$ETKCFG`, set by `agent_scripts/sandbox/setup.sh`; arrangement symlinks must exist). Incremental rebuilds take seconds. After a reverted/discarded task, stale objects can linger in `$CACTUSX/configs/mcnux/build/MCNuX/` (e.g. `.cxx/.cxx.d/.cxx.o` for deleted sources, or `.cxx.d` dependency files still naming a deleted/renamed *header* — "No rule to make target") and break the build — remove them (or clean-rebuild the thorn) before diagnosing further. A second stale-object mode: an OOM-killed `cc1plus` (heavy CarpetX TUs under parallel make) can leave a *truncated* `.o` that make treats as up-to-date, causing undefined-reference link failures on retry — find with `find $CACTUSX/configs/mcnux/build -name '*.o' -size -4k`, delete, rebuild.
 - Tests: `./agent_scripts/test.sh` (Cactus regression harness, sandbox only). Compile-time selftests (static_asserts in shared headers) run on every build via `stub.cxx`.
 - Non-harness gates: `./agent_scripts/gate_paramcheck.sh` (sandbox only, after `build.sh`) — exact-criterion check for deliberately-aborting runs the harness cannot express; parfiles in `agent_scripts/gates/*.par`, transient output under `$CACTUSX/GATE/mcnux/`, never in the repo.
 - Spec-corpus linter: `bash specs/tools/validate_specs.sh` from the repo root, sandbox only (no build needed) — the `flesh/` reference root resolves solely through `MCNX_FLESH_ROOT`, persisted by `agent_scripts/sandbox/setup.sh`; outside the sandbox every `flesh/...` citation check fails spuriously (environment defect, never a corpus defect).
