@@ -38,12 +38,15 @@
 #include "mcnux_deposit.hxx"
 #include "mcnux_emission.hxx"
 #include "mcnux_fluid.hxx"
+#include "mcnux_interactions.hxx" // opacity_cgs_to_code (alpha selection)
 #include "mcnux_particles.hxx"
 #include "mcnux_srcterms.hxx"
 #include "mcnux_stats.hxx"
 #include "mcnux_stats_emission.hxx"
+#include "mcnux_stats_writer.hxx"
 #include "mcnux_table_range.hxx"
 #include "mcnux_tetrad.hxx"
+#include "mcnux_trp.hxx"
 #include "mcnux_units.hxx"
 
 #include <AMReX_AmrParGDB.H> // completes AmrParGDB (mcnux_geodesic.cxx note)
@@ -57,6 +60,7 @@
 #include <cctk_Arguments.h>
 #include <cctk_Parameters.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
@@ -124,6 +128,11 @@ extern "C" void MCNuX_Emission(CCTK_ARGUMENTS) {
   // Captured once per step, host side.
   const CoefficientSource src = selected_coefficient_source();
   const AnalyticOpacityParams ap = analytic_params_from_parameters();
+  // Trapped-regime scheme ([MCNX-TRP-02]): with trapped_scheme =
+  // "relabeled", eta' = alpha eta substitutes into the count law below
+  // (kappa' is never used in emission); the default explicit scheme leaves
+  // every count-pass expression byte-for-byte the baseline.
+  const TrpParams trp = trp_params_from_parameters();
   // The production-correct dispatch shape: the table slot is a
   // RangedTableCoefficients (never the bare assembly). No table-residency
   // layer exists yet, so its views are default (null) — safe because
@@ -195,6 +204,11 @@ extern "C" void MCNuX_Emission(CCTK_ARGUMENTS) {
       const double dV_cm3 = dV * length_code_to_cgs * length_code_to_cgs *
                             length_code_to_cgs;
       const double dt_s = dt * time_code_to_cgs;
+      // Cell light-crossing time of the [MCNX-TRP-04] alpha selection: code
+      // units with c = 1, so Dt_c = min_d dx_d, uniform over the level.
+      // Consumed only on the relabeled branch of the count pass.
+      const double trp_dt_c = std::min(
+          geom.CellSize(0), std::min(geom.CellSize(1), geom.CellSize(2)));
 
       // The level's domain lower corner: the (i0, j0, k0) anchor of the
       // [MCNX-PKT-05] cell key.
@@ -276,10 +290,27 @@ extern "C" void MCNuX_Emission(CCTK_ARGUMENTS) {
           const double sqrt_neg_g = ms.alpha * std::sqrt(gu.det);
 
           const EnergyBin bin{bins.lo[b], bins.hi[b]};
-          const double eta_spectral =
+          const Coefficients co =
               evaluate_coefficients(src, ap, table_eval, s,
-                                    bin_center_energy(bin), fs.state)
-                  .eta;
+                                    bin_center_energy(bin), fs.state);
+          double eta_spectral = co.eta;
+          // Trapped-regime relabeling ([MCNX-TRP-02], count-law substitution
+          // point): eta' = alpha eta, with alpha from the [MCNX-TRP-04]
+          // selection rule on the UNPRIMED kappa_a — converted cgs -> code
+          // against the code-unit Dt_c (raw cgs kappa_a here would be a
+          // silent wrong-alpha bug) — or from the fixed-alpha override.
+          // Substituted BEFORE bin_integrated_eta, so N_p, the created
+          // packets, the deposits, AND the stats-emission expected-count
+          // accumulation below all see the same eta' (stats are never
+          // patched separately). Explicit scheme: no FP op added.
+          if (trp.relabeled) {
+            const double alpha =
+                (trp.alpha_fixed > 0.0)
+                    ? trp.alpha_fixed
+                    : alpha_select(opacity_cgs_to_code(co.kappa_a), trp_dt_c,
+                                   trp.xi);
+            eta_spectral = alpha * eta_spectral;
+          }
           const double eta_b = bin_integrated_eta(eta_spectral, bin_width(bin));
           const double N_p =
               packet_count(s, sqrt_neg_g, dV_cm3, dt_s, eta_b, E_p_MeV);
@@ -638,18 +669,15 @@ extern "C" void MCNuX_StatsEmission(CCTK_ARGUMENTS) {
                 "(MCNuX/interface.ccl)",
                 nrows, expected_rows);
 
-  for (int r = 0; r < nrows; ++r) {
-    stats_estimate[r] = 0.0;
-    stats_expected[r] = 0.0;
-    stats_sigma[r] = 0.0;
-    stats_z[r] = 0.0;
-  }
+  // The shared stats-writer scaffold (mcnux_stats_writer.hxx): zero fill +
+  // per-row ZScore mirror; the log line stays here (the row meaning is owned
+  // by this writer).
+  const StatsDiagView view{stats_estimate, stats_expected, stats_sigma,
+                           stats_z, nrows};
+  view.zero_fill();
 
   const auto put = [&](int r, const ZScore &zs) {
-    stats_estimate[r] = zs.estimate;
-    stats_expected[r] = zs.expected;
-    stats_sigma[r] = zs.sigma;
-    stats_z[r] = zs.z;
+    view.put(r, zs);
     CCTK_VINFO("MCNuX stats-emission row %2d: estimate = %.17g, "
                "expected = %.17g, sigma = %.17g, z = %.17g  %s",
                r, zs.estimate, zs.expected, zs.sigma, zs.z,

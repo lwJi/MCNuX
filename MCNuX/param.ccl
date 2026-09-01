@@ -190,6 +190,58 @@ BOOLEAN enable_interactions "Run the sampling-episode driver (interaction compet
 {
 } "no"
 
+# Trapped-regime scheme selector of specs/trapped-regime-treatment.md
+# ([MCNX-TRP-01/02]; spec :81): "explicit" is the unmodified baseline (no
+# relabeling anywhere — every pre-existing benchmark's golden data is a run
+# of this branch); "relabeled" substitutes the primed coefficients
+#   eta' = alpha eta, kappa_a' = alpha kappa_a,
+#   kappa_s' = kappa_s + (1 - alpha) kappa_a
+# (the BINDING 2021 alpha convention of [MCNX-TRP-03], mcnux_trp.hxx) into
+# the emission count law and the event-sampling law — and nowhere else;
+# tallies remain the actual packet events. alpha per (cell, species, energy
+# bin) comes from the [MCNX-TRP-04] selection rule (trp_xi below) unless
+# trp_alpha_fixed overrides it. STEERABLE=NEVER: the drivers capture the
+# scheme once at startup (TrpParams of mcnux_trp.hxx). MCNuX_ParamCheck
+# forbids "relabeled" with opacity_source = "table" (no table-residency
+# layer exists, the enable_emission/enable_interactions precedent).
+
+KEYWORD trapped_scheme "Trapped-regime treatment (specs/trapped-regime-treatment.md [MCNX-TRP-01/02])" STEERABLE=NEVER
+{
+  "explicit"  :: "unmodified coefficients (the baseline scheme)"
+  "relabeled" :: "opacity relabeling with the [MCNX-TRP-04] alpha selection"
+} "explicit"
+
+# The xi control of the [MCNX-TRP-04] alpha-selection rule
+# (specs/trapped-regime-treatment.md:145-171, provenance arXiv:2103.16588):
+# alpha = min(1, xi/(kappa_a Dt_c)) per (cell, species, energy bin), with
+# kappa_a the UNPRIMED code-unit absorption opacity and Dt_c the cell
+# light-crossing time (min_d dx_d in code units, c = 1), so that
+# kappa_a' Dt_c <= xi by construction — the only binding stability control
+# (the beta-dependent Eq. 50 bound is an explicitly deferred open question,
+# spec :450-455). Typically xi = 1 (the spec's stated practice). Ignored
+# unless trapped_scheme = "relabeled", or when trp_alpha_fixed overrides the
+# rule. STEERABLE=NEVER: captured once at startup.
+
+CCTK_REAL trp_xi "Relabeled-scheme stability control xi of alpha = min(1, xi/(kappa_a Dt_c)) (specs/trapped-regime-treatment.md [MCNX-TRP-04])" STEERABLE=NEVER
+{
+  (0:* :: "positive stability control"
+} 1.0
+
+# Fixed-alpha verification override of specs/trapped-regime-treatment.md
+# [MCNX-TRP-04]/[MCNX-TRP-05]: a value in (0, 1] replaces the selection rule
+# with that constant alpha everywhere (alpha = 1 is the exact-identity
+# endpoint the [MCNX-TRP-05] bitwise limit benchmark pins); the default -1
+# sentinel selects the rule. The (0, 1] range clause IS the corpus's
+# alpha-range rejection (spec :443-449; Cactus enforces parameter ranges at
+# parse time). Ignored unless trapped_scheme = "relabeled". STEERABLE=NEVER:
+# captured once at startup.
+
+CCTK_REAL trp_alpha_fixed "Fixed-alpha override of the [MCNX-TRP-04] selection rule (-1 = use the rule; verification use, [MCNX-TRP-05])" STEERABLE=NEVER
+{
+  -1:-1 :: "sentinel: use the alpha-selection rule"
+  (0:1] :: "fixed retained-fraction alpha (2021 convention, [MCNX-TRP-03])"
+} -1.0
+
 # Runtime id-contract check of specs/particle-container-and-gpu.md
 # [MCNX-GPU-04] (the `absorb-smoke` benchmark): MCNuX::test_id_contract =
 # yes schedules MCNuX_IdContractCheck once per transport step after the
@@ -250,6 +302,95 @@ BOOLEAN test_emission "Mirror the emitted packet population into the packet diag
 BOOLEAN test_stats_emission "Reduce the emission step into (estimate, expected, sigma, z) statistical check rows" STEERABLE=NEVER
 {
 } "no"
+
+# Beam-attenuation benchmark switch of specs/neutrino-matter-interactions.md
+# ([MCNX-INT-01]/[MCNX-INT-03] Verification: beam attenuation, statistical,
+# 4 sigma) and specs/verification-suite-design.md [MCNX-VER-07] (the
+# `stats-beam` benchmark): MCNuX::test_stats_beam = yes seeds the
+# deterministic collimated monoenergetic beam at initial time
+# (MCNuX_SeedBeamPackets: beam_num_packets nu_e packets at the seed plane
+# beam_x0 with identical +x null momenta, no RNG consumed), turns on storage
+# for the MCNuX::mcnux_stats_beam_diag verdict table, and schedules
+# MCNuX_StatsBeam after the episode driver, reducing the run into the
+# transmitted-count-vs-exp(-kappa_a L) check row and the exact count-closure
+# row. Off by default — verification scaffolding — and STEERABLE=NEVER,
+# because the table's storage and the routines' scheduling are decided from
+# it at startup. MCNuX_ParamCheck requires enable_interactions with it (the
+# episode driver IS the absorber) and forbids it with enable_emission and
+# test_synthetic_packets (id-collision / duplicate-seeder hazards).
+
+BOOLEAN test_stats_beam "Seed the deterministic beam fixture and reduce the run into the beam-attenuation statistical check rows" STEERABLE=NEVER
+{
+} "no"
+
+# Beam fixture controls (ignored unless test_stats_beam = yes; all
+# STEERABLE=NEVER — the fixture is written once at initial time and golden
+# data depends on it). The packet-count default is the pinned statistical
+# N_p = 2^20 of [MCNX-RNG-07] (stats_default_num_packets, mcnux_stats.hxx);
+# a benchmark pinning a different value documents it in its parfile.
+
+CCTK_INT beam_num_packets "Number of beam packets (default: the pinned statistical N_p = 2^20 of [MCNX-RNG-07])" STEERABLE=NEVER
+{
+  1:* :: "at least one packet"
+} 1048576
+
+CCTK_REAL beam_energy_MeV "Beam packet energy [MeV] (monoenergetic; the attenuation law is energy-independent for gray kappa_a0)" STEERABLE=NEVER
+{
+  (0:* :: "positive beam energy [MeV]"
+} 10.0
+
+CCTK_REAL beam_x0 "Seed-plane x coordinate of the beam [code units]; the slab thickness is L = x_hi - beam_x0" STEERABLE=NEVER
+{
+  *:* :: "must lie inside the domain (checked at seeding; keep it off the x_lo face)"
+} -0.875
+
+# Scattering-collision-statistics benchmark switch of
+# specs/neutrino-matter-interactions.md ([MCNX-INT-02]/[MCNX-INT-04]
+# Verification: collision statistics + scattering isotropy, statistical,
+# 4 sigma) and specs/verification-suite-design.md [MCNX-VER-07] (the
+# `stats-scatterbox` benchmark): MCNuX::test_stats_scatterbox = yes seeds the
+# deterministic cell-center packet lattice inside the inner cube
+# [-scatterbox_half_width, +scatterbox_half_width]^3 at initial time
+# (MCNuX_SeedScatterboxPackets: scatterbox_num_packets nu_e packets with
+# identical +x null momenta, no RNG consumed), turns on the step-scoped
+# scattering-statistics accumulator inside MCNuX_EpisodeDriver, turns on
+# storage for the MCNuX::mcnux_stats_scatterbox_diag verdict table, and
+# schedules MCNuX_StatsScatterbox after the episode driver, reducing the run
+# into the Poisson mean/variance rows, the post-scatter isotropy rows, and
+# the exact packets-sampled closure row. Off by default — verification
+# scaffolding — and STEERABLE=NEVER, because the table's storage and the
+# routines' scheduling are decided from it at startup. MCNuX_ParamCheck
+# requires enable_interactions with it (the episode driver IS the scatterer)
+# and forbids it with enable_emission, test_synthetic_packets, AND
+# test_stats_beam (all other packet producers/seeders are id-collision /
+# duplicate-seeder hazards: this seeder writes hard-coded ids 1..N with
+# cpu 0).
+
+BOOLEAN test_stats_scatterbox "Seed the deterministic scattering-box lattice and reduce the run into the collision-statistics check rows" STEERABLE=NEVER
+{
+} "no"
+
+# Scatterbox fixture controls (ignored unless test_stats_scatterbox = yes;
+# all STEERABLE=NEVER — the fixture is written once at initial time and
+# golden data depends on it). The packet-count default is the pinned
+# statistical N_p = 2^20 of [MCNX-RNG-07] (stats_default_num_packets,
+# mcnux_stats.hxx); a benchmark pinning a different value documents it in
+# its parfile.
+
+CCTK_INT scatterbox_num_packets "Number of scatterbox packets (default: the pinned statistical N_p = 2^20 of [MCNX-RNG-07])" STEERABLE=NEVER
+{
+  1:* :: "at least one packet"
+} 1048576
+
+CCTK_REAL scatterbox_energy_MeV "Scatterbox packet energy [MeV] (monoenergetic; the Poisson count law is energy-independent for gray kappa_s0)" STEERABLE=NEVER
+{
+  (0:* :: "positive packet energy [MeV]"
+} 10.0
+
+CCTK_REAL scatterbox_half_width "Half-width h of the seeding cube [-h, h]^3 [code units]; must be strictly inside the domain (checked at seeding), and h + c dt below the domain half-width keeps the run escape-free by construction" STEERABLE=NEVER
+{
+  (0:* :: "positive half-width [code units]"
+} 0.4
 
 # The run's base RNG seed S of specs/rng-and-reproducibility.md: every
 # emission draw is an evaluation of the pure u(S, q, e, k) of mcnux_rng.hxx

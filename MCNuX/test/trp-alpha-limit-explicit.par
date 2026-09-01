@@ -1,0 +1,142 @@
+# trp-alpha-limit-explicit — the explicit-scheme leg of the [MCNX-TRP-05]
+# alpha -> 1 limit benchmark pair of specs/trapped-regime-treatment.md
+# (verification clause specs/trapped-regime-treatment.md:373-376; benchmark
+# row specs/verification-suite-design.md:247). This leg runs the baseline
+# explicit scheme ([MCNX-TRP-01]: unmodified coefficients, trapped_scheme
+# stated explicitly below even though it is the default) and its captured
+# output is the SHARED golden for both legs: the sibling
+# trp-alpha-limit-relabeled.par is byte-identical except for the
+# trapped-regime block (trapped_scheme = "relabeled", trp_alpha_fixed = 1.0)
+# and diffs against a verbatim byte copy of THIS leg's capture — at alpha = 1
+# the relabeling is the identity (eta' = eta, kappa' = kappa exactly) and
+# both configurations consume identical RNG draws, so the relabeled run must
+# reproduce this run bitwise at the harness tier (ABSTOL = RELTOL = 1e-12)
+# on a single rank.
+#
+# Setup: flat Minkowski over the TestMCNuX "equilibration box" hydro profile
+# (uniform rho0, T0, Ye0, vel = 0 in EVERY cell) — the trapped-regime spec's
+# canonical background — with BOTH runtime drivers active so BOTH
+# coefficient-substitution sites are exercised: the emission count law
+# (mcnux_emission.cxx, eta' enters packet_count) and the episode driver's
+# event sampling (mcnux_interactions.cxx, kappa_a'/kappa_s' enter the
+# interaction-time draw and channel competition). The analytic (gray)
+# coefficient source is mandatory (paramcheck forbids the relabeled scheme
+# with opacity_source = "table"), nu_e only, other species inert.
+#
+# Event chain per iteration is the interactions-fixedseed.par precedent:
+# MCNuX_EpisodeDriver (episode loop over the live population), then
+# MCNuX_IdContractCheck ([MCNX-GPU-04]), then MCNuX_Emission (creation),
+# then MCNuX_LedgerClosure ([MCNX-HYD-05], any failing channel aborts).
+# Synthetic fixtures stay off (hard-forbidden with the real contributors).
+#
+# Tuning at this seed (tuned, then captured): the box emits in every one of
+# the 512 cells (vs. the 32 interior cells of interactions-fixedseed's hot
+# sphere), so eta_scale[0] sits ~12x below that benchmark's value at the
+# same kappa_a0[0] = 4.0e-5 cm^-1 and T0 = 5 MeV. eta_scale[0] = 1.0e-49
+# lands exactly 8 nu_e packets (3+1+1+3, ids 1..8 — the full SIZE=8
+# diagnostic-table budget; ids are never reused, so the TOTAL ever issued is
+# what must fit) over the 4 emission steps (eta_scale[1] = eta_scale[2] = 0:
+# no nu_e_bar/nu_x creation, id budget tight); kappa_s0[0] = 5.0e-5 cm^-1
+# (mean free time ~0.135) and kappa_a0[0] (mean free time ~0.17) against
+# dt = 0.125 give 4 scattering events and 3 absorptions among the created
+# packets within cctk_itlast = 4 (no escapes: the 3 all-zero final rows are
+# exactly the 3 absorptions). Both event channels plus creation were
+# confirmed fired from the episode-driver/emission log lines of the capture
+# run, not assumed.
+#
+# Golden data, one file set per iteration (harness defaults
+# ABSTOL = RELTOL = 1e-12):
+#   * MCNuX::mcnux_packet_diag — the per-packet table (rows keyed id - 1,
+#     SIZE = 8), filled post-emission each iteration: new rows at creation,
+#     momentum-direction changes at scatterings, an absorbed (or escaped)
+#     packet's row reverts to all-zero and stays zero.
+#   * MCNuX::mcnux_ledger_diag — the five-channel closure verdict table:
+#     lg_pass = 1 on every row of every iteration.
+# Fixed-seed re-runs reproduce every TSV bitwise ([MCNX-RNG-06]).
+#
+# ODESolvers must be active: ADMBaseX and HydroBaseX initial data are both
+# scheduled IN ODESolvers_Initial, and the driver reads metric and fluid.
+
+ActiveThorns = "
+    CarpetX
+    IOUtil
+    ODESolvers
+    ADMBaseX
+    HydroBaseX
+    MCNuX
+    TestMCNuX
+"
+
+# Mandatory for any MCNuX run: CarpetX's own CCTK_PARAMCHECK routine rejects
+# every other presync mode.
+Cactus::presync_mode = "mixed-error"
+
+# Both runtime drivers on, under the ledger-closure and id-contract audits;
+# synthetic fixtures off (see header).
+MCNuX::enable_emission = yes
+MCNuX::enable_interactions = yes
+MCNuX::test_emission = yes
+MCNuX::test_ledger_closure = yes
+MCNuX::test_id_contract = yes
+MCNuX::test_synthetic_packets = no
+MCNuX::test_synthetic_deposit = no
+MCNuX::test_fluid_gather = no
+MCNuX::run_selftests = no
+
+# THE SUBJECT OF THE PAIR: the trapped-regime scheme selection. This leg
+# pins the baseline explicit scheme ([MCNX-TRP-01]) — the default, restated
+# so the two parfiles differ ONLY in this block. The sibling sets
+# trapped_scheme = "relabeled" with trp_alpha_fixed = 1.0 here.
+MCNuX::trapped_scheme = "explicit"
+
+# The pinned primary seed (the rng_seed default, restated) and the default
+# target packet energy, restated for determinism-audit clarity.
+MCNuX::rng_seed = 1296518744
+MCNuX::E_p = 10.0
+
+# Analytic coefficient source (mandatory for the relabeled sibling: no
+# table-residency layer exists), nu_e in all three channels, other species
+# inert (see the tuning note in the header).
+MCNuX::opacity_source = "analytic"
+MCNuX::kappa_a0[0] = 4.0e-5
+MCNuX::kappa_s0[0] = 5.0e-5
+MCNuX::eta_scale[0] = 1.0e-49
+MCNuX::eta_scale[1] = 0.0
+MCNuX::eta_scale[2] = 0.0
+
+# Flat background: the ADMBaseX defaults, restated.
+ADMBaseX::initial_data = "Cartesian Minkowski"
+ADMBaseX::initial_lapse = "one"
+ADMBaseX::initial_shift = "zero"
+
+# Uniform fluid everywhere (T0 > 0: the analytic Kirchhoff form divides
+# by T).
+HydroBaseX::initial_hydro = "equilibration box"
+TestMCNuX::rho0 = 1.0e12
+TestMCNuX::T0 = 5.0
+TestMCNuX::Ye0 = 0.25
+
+# 8^3 cells over the CarpetX default domain [-1, 1]^3 (dx = 0.25; default
+# dtfac gives dt = 0.125).
+CarpetX::ncells_x = 8
+CarpetX::ncells_y = 8
+CarpetX::ncells_z = 8
+
+Cactus::cctk_itlast = 4
+
+IO::out_dir = $parfile
+IO::out_every = 1
+IO::parfile_write = no
+
+# Keep the column-label header but drop IOUtil's creation date, hostname, and
+# absolute parameter-file path (see unit-selftest.par).
+IO::out_fileinfo = "axis labels"
+
+CarpetX::out_metadata = no
+
+# The golden data: the per-packet diagnostic table and the five-channel
+# ledger-closure verdict table, one file per iteration.
+CarpetX::out_tsv_vars = "
+    MCNuX::mcnux_packet_diag
+    MCNuX::mcnux_ledger_diag
+"

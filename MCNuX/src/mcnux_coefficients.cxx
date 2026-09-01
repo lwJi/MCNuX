@@ -31,4 +31,18 @@ AnalyticOpacityParams analytic_params_from_parameters() {
   return p;
 }
 
+// Trapped-regime scheme glue (specs/trapped-regime-treatment.md
+// [MCNX-TRP-02/04]): the only place trapped_scheme, trp_xi, and
+// trp_alpha_fixed are read. All three are STEERABLE=NEVER; the drivers
+// capture the returned TrpParams once per step and carry it by value into
+// their kernels (mcnux_trp.hxx).
+TrpParams trp_params_from_parameters() {
+  DECLARE_CCTK_PARAMETERS;
+  TrpParams t{};
+  t.relabeled = CCTK_EQUALS(trapped_scheme, "relabeled");
+  t.xi = trp_xi;
+  t.alpha_fixed = trp_alpha_fixed;
+  return t;
+}
+
 } // namespace MCNuX

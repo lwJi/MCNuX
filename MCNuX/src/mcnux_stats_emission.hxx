@@ -12,7 +12,11 @@
 // constants only; verification-suite-design.md:457-458 grants each benchmark
 // its own documented methodology). These formulas are shared analytic
 // content for the stats-* benchmark family, so they live in their own small
-// header rather than file-local in mcnux_emission.cxx:
+// header rather than file-local in mcnux_emission.cxx — second consumer
+// MCNuX_StatsScatterbox (mcnux_interactions.cxx), whose post-scatter
+// isotropy rows reuse the sigma_isotropy_* pair below verbatim: the
+// [MCNX-INT-04] scatter draw is the identical cos theta = 2 u1 - 1,
+// phi = 2 pi u2 map as emission's [MCNX-PKT-04] direction draw:
 //
 //   * sigma_bernoulli_sum — the count-law estimator's standard error. The
 //     [MCNX-PKT-02] floor + Bernoulli-remainder construction makes each

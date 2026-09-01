@@ -316,6 +316,59 @@
 //                                                 {count, Sum N, Sum N p^t}
 //                                                 on a two-species hand
 //                                                 fixture, exact)
+// 162       trp.select.clamp_at_one               [MCNX-TRP-04] (alpha_select
+//                                                 == 1.0 exactly for
+//                                                 kappa_a Dt_c <= xi, incl.
+//                                                 kappa_a = 0 and the exact
+//                                                 boundary)
+// 163       trp.select.xi_scaling_exact           [MCNX-TRP-04] (scaling
+//                                                 branch reproduces
+//                                                 xi/(kappa_a Dt_c) bitwise;
+//                                                 exact-fraction anchors)
+// 164       trp.select.kappa_ap_dtc_bound         [MCNX-TRP-04] (the
+//                                                 constructive invariant
+//                                                 kappa_a' Dt_c <= xi over
+//                                                 the alpha_select -> relabel
+//                                                 composition sweep)
+// 165       trp.select.fixed_alpha_override       [MCNX-TRP-04/05] (positive
+//                                                 alpha_fixed bypasses the
+//                                                 rule; alpha = 1 identity
+//                                                 endpoint; -1 sentinel
+//                                                 selects the rule)
+// 166       statsbeam.p.zero_depth_one            [MCNX-VER-07] (exp(-k*0)
+//                                                 == 1 exactly, zero-depth
+//                                                 transmission endpoint)
+// 167       statsbeam.p.multiplicative            [MCNX-INT-02] (Beer-
+//                                                 Lambert p(L1+L2) ==
+//                                                 p(L1) p(L2), machine tier
+//                                                 on exact binary depths)
+// 168       statsbeam.sigma.exact                 [MCNX-VER-07] (binomial
+//                                                 count sigma
+//                                                 sqrt(N_p p (1-p)) exact:
+//                                                 sqrt(2^18) == 512 at the
+//                                                 pinned N_p = 2^20)
+// 169       statsbeam.sigma.degenerate_zero       [MCNX-VER-07] (sigma = 0
+//                                                 at the deterministic
+//                                                 endpoints p in {0, 1},
+//                                                 exact)
+// 170       statsscat.var.mean_exact              [MCNX-VER-07] (Poisson
+//                                                 sample-mean variance
+//                                                 lambda/n: (1/2)/4 = 1/8,
+//                                                 exact)
+// 171       statsscat.var.variance_exact          [MCNX-VER-07] (Poisson
+//                                                 sample-variance variance
+//                                                 (lambda + 2 lambda^2)/n:
+//                                                 (1/2 + 1/2)/4 = 1/4,
+//                                                 exact — the lambda term
+//                                                 is load-bearing)
+// 172       statsscat.sigma.mean_exact            [MCNX-VER-07] (sample-mean
+//                                                 sigma sqrt(lambda/n)
+//                                                 exact: sqrt(2^-18) = 2^-9
+//                                                 at the pinned N_p = 2^20)
+// 173       statsscat.sigma.variance_exact        [MCNX-VER-07] (sample-
+//                                                 variance sigma exact on a
+//                                                 perfect square:
+//                                                 sqrt(1/4) = 1/2)
 //
 // Tiers, per specs/README.md and the tolerance discussion in mcnux_units.hxx:
 //   * exact   — pass requires a measured error of identically 0 (KATs, the
@@ -466,6 +519,33 @@ void run_battery(Battery &b) {
   // accumulation) through the mcnux_escape.hxx pure functions on exact
   // binary-fraction fixtures.
   append_escape_rows(b);
+
+  // Rows 162..165 — the [MCNX-TRP-04] alpha-selection rule of
+  // specs/trapped-regime-treatment.md:145-171 through the mcnux_trp.hxx
+  // alpha_select pure function on pinned (kappa_a, Dt_c, xi) fixtures:
+  // clamp-at-1 branch (incl. kappa_a = 0 and the exact boundary), bitwise
+  // xi/(kappa_a Dt_c) scaling branch, the constructive kappa_a' Dt_c <= xi
+  // invariant through relabel, and the [MCNX-TRP-05] fixed-alpha override
+  // path.
+  append_trp_select_rows(b);
+
+  // Rows 166..169 — the benchmark-owned transmission-probability and
+  // binomial standard-error formulas of the stats-beam statistical
+  // benchmark ([MCNX-INT-01]/[MCNX-INT-03] beam attenuation,
+  // [MCNX-VER-07]) through mcnux_stats_beam.hxx: the exact zero-depth
+  // endpoint, machine-tier Beer-Lambert multiplicativity, an exact
+  // perfect-square sigma at the pinned N_p = 2^20, and the sigma = 0
+  // deterministic endpoints.
+  append_stats_beam_rows(b);
+
+  // Rows 170..173 — the benchmark-owned Poisson standard-error formulas of
+  // the stats-scatterbox statistical benchmark ([MCNX-INT-02]/[MCNX-INT-04]
+  // collision statistics, [MCNX-VER-07]) through
+  // mcnux_stats_scatterbox.hxx: exact rational fixtures of the sample-mean
+  // variance lambda/n and the sample-variance variance
+  // (lambda + 2 lambda^2)/n, and exact perfect-square sqrt fixtures for
+  // both sigmas (one at the pinned N_p = 2^20).
+  append_stats_scatterbox_rows(b);
 }
 
 // Size of the MCNuX::mcnux_selftest array as declared in interface.ccl.

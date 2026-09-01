@@ -51,6 +51,19 @@ extern "C" void MCNuX_ParamCheck(CCTK_ARGUMENTS) {
         "driver's RangedTableCoefficients slot has no live table views to "
         "evaluate ([MCNX-OPA-04]). Use the analytic coefficient source, or "
         "disable interactions.");
+  // Trapped-regime guard (specs/trapped-regime-treatment.md [MCNX-TRP-02]):
+  // the relabeled scheme's alpha selection reads the unprimed kappa_a off
+  // the coefficient interface, and no table-residency layer exists — the
+  // same no-live-table-views reason as the emission/interactions guards
+  // above.
+  if (CCTK_EQUALS(trapped_scheme, "relabeled") &&
+      CCTK_EQUALS(opacity_source, "table"))
+    CCTK_VERROR(
+        "MCNuX::trapped_scheme = \"relabeled\" requires "
+        "MCNuX::opacity_source = \"analytic\": no table-residency layer "
+        "exists yet, so the relabeling's alpha selection has no live table "
+        "views from which to read the unprimed kappa_a ([MCNX-OPA-04]). Use "
+        "the analytic coefficient source, or keep the explicit scheme.");
   // Ledger-closure auditability guard ([MCNX-HYD-05]): the synthetic-deposit
   // fixture normalizes with synthfix::dV * synthfix::dt = 0.5 while the real
   // emission contributor normalizes with the grid's cell volume times the
@@ -97,6 +110,78 @@ extern "C" void MCNuX_ParamCheck(CCTK_ARGUMENTS) {
         "specs/verification-suite-design.md:255-279); without the emission "
         "loop there is no step to reduce. Enable emission, or turn the "
         "statistical writer off.");
+
+  // stats-beam guards ([MCNX-VER-07]; the test_stats_emission precedent
+  // above and the id-collision precedent below): the beam benchmark reduces
+  // the episode driver's absorption/escape resolution, so the driver must
+  // run; and its seeder writes hard-coded packet ids 1..beam_num_packets
+  // with cpu 0 without touching the AMReX id counter, so any other packet
+  // producer/seeder in the same run is an id-collision or duplicate-seeder
+  // hazard.
+  if (test_stats_beam && !enable_interactions)
+    CCTK_VERROR(
+        "MCNuX::test_stats_beam = yes requires MCNuX::enable_interactions = "
+        "yes: the beam-attenuation writer MCNuX_StatsBeam reduces the episode "
+        "driver's pure-absorber resolution of the beam "
+        "([MCNX-INT-01]/[MCNX-INT-03], the `stats-beam` benchmark of "
+        "specs/verification-suite-design.md:265); without the driver no "
+        "packet is ever absorbed or escapes. Enable interactions, or turn "
+        "the beam benchmark off.");
+  if (test_stats_beam && enable_emission)
+    CCTK_VERROR(
+        "MCNuX::test_stats_beam = yes is incompatible with "
+        "MCNuX::enable_emission = yes: the beam seeder writes hard-coded "
+        "packet ids 1..beam_num_packets without touching the AMReX id "
+        "counter, so production packets created by the emission loop would "
+        "collide with them ([MCNX-GPU-04] id uniqueness), and emitted "
+        "packets would contaminate the beam's transmitted/absorbed count "
+        "closure.");
+  if (test_stats_beam && test_synthetic_packets)
+    CCTK_VERROR(
+        "MCNuX::test_stats_beam = yes is incompatible with "
+        "MCNuX::test_synthetic_packets = yes: both are initial-time packet "
+        "seeders writing hard-coded id ranges starting at 1, so their ids "
+        "would collide ([MCNX-GPU-04] id uniqueness), and the fixture "
+        "packets would contaminate the beam's transmitted/absorbed count "
+        "closure.");
+
+  // stats-scatterbox guards (the stats-beam block above, cloned: same
+  // driver-must-run reasoning and the same hard-coded-ids-1..N seeder
+  // hazard; additionally the beam seeder itself collides — both seeders
+  // write ids 1..N with cpu 0 and would double-seed the population).
+  if (test_stats_scatterbox && !enable_interactions)
+    CCTK_VERROR(
+        "MCNuX::test_stats_scatterbox = yes requires "
+        "MCNuX::enable_interactions = yes: the collision-statistics writer "
+        "MCNuX_StatsScatterbox reduces the episode driver's scattering "
+        "resolution of the box ([MCNX-INT-02]/[MCNX-INT-04], the "
+        "`stats-scatterbox` benchmark of "
+        "specs/verification-suite-design.md:266); without the driver no "
+        "packet ever scatters. Enable interactions, or turn the scatterbox "
+        "benchmark off.");
+  if (test_stats_scatterbox && enable_emission)
+    CCTK_VERROR(
+        "MCNuX::test_stats_scatterbox = yes is incompatible with "
+        "MCNuX::enable_emission = yes: the scatterbox seeder writes "
+        "hard-coded packet ids 1..scatterbox_num_packets without touching "
+        "the AMReX id counter, so production packets created by the emission "
+        "loop would collide with them ([MCNX-GPU-04] id uniqueness), and "
+        "emitted packets would contaminate the per-packet Poisson count "
+        "statistics.");
+  if (test_stats_scatterbox && test_synthetic_packets)
+    CCTK_VERROR(
+        "MCNuX::test_stats_scatterbox = yes is incompatible with "
+        "MCNuX::test_synthetic_packets = yes: both are initial-time packet "
+        "seeders writing hard-coded id ranges starting at 1, so their ids "
+        "would collide ([MCNX-GPU-04] id uniqueness), and the fixture "
+        "packets would contaminate the per-packet Poisson count statistics.");
+  if (test_stats_scatterbox && test_stats_beam)
+    CCTK_VERROR(
+        "MCNuX::test_stats_scatterbox = yes is incompatible with "
+        "MCNuX::test_stats_beam = yes: both are initial-time packet seeders "
+        "writing hard-coded id ranges starting at 1, so their ids would "
+        "collide ([MCNX-GPU-04] id uniqueness), and each fixture would "
+        "contaminate the other benchmark's statistics.");
 
   if (enable_emission && test_synthetic_packets)
     CCTK_VERROR(

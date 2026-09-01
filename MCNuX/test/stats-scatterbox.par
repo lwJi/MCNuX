@@ -1,0 +1,171 @@
+# stats-scatterbox — the collision-statistics + scattering-isotropy
+# statistical benchmark of specs/neutrino-matter-interactions.md:201-207
+# ([MCNX-INT-02]/[MCNX-INT-04] Verification: collision statistics and
+# scattering isotropy, statistical, 4 sigma) and
+# specs/verification-suite-design.md:266 ([MCNX-VER-07]): a deterministic
+# monoenergetic nu_e packet lattice inside a uniform pure-scattering box
+# (analytic opacity mode, kappa_a = 0 -> eta = 0 automatically since
+# eta ~ kappa_a0) on flat Minkowski, resolved by the episode driver in ONE
+# transport step, and reduced by MCNuX_StatsScatterbox into per-check
+# (estimate, expected, sigma, z) rows, golden in
+# MCNuX::mcnux_stats_scatterbox_diag. Acceptance |z| <= 4 at the pinned
+# packet count and seed was verified once at golden capture ([MCNX-RNG-07]:
+# no seed shopping); thereafter the archived z values are themselves golden
+# numbers diffed at the harness defaults ABSTOL = RELTOL = 1e-12 (the check
+# is deterministic at pinned seed).
+#
+# The pinned path-length definition: l_path := c * Delta t of the single
+# transport step = cctk_delta_time in code units (c = 1) — a null packet on
+# the at-rest Minkowski background moves at coordinate speed 1 through every
+# scattering direction change, so ONE step gives every packet path length
+# exactly dt. Cell-crossing episodes redraw the exponential interaction time
+# per cell ([MCNX-INT-02]), which is statistically exact by memorylessness
+# in the uniform medium, so per-packet scattering counts are exactly
+# Poisson(lambda = kappa_s_code * l_path).
+#
+# Check rows (SIZE=5; layout owned by mcnux_interactions.cxx):
+#   0  Poisson sample mean kbar = Sum k / N_p vs lambda,
+#      sigma = sqrt(lambda/N_p) ~ 1.38e-3;
+#   1  Poisson unbiased sample variance (Sum k^2 - N_p kbar^2)/(N_p - 1) vs
+#      lambda, sigma = sqrt((lambda + 2 lambda^2)/N_p) ~ 3.08e-3 (the
+#      documented large-N leading order, mcnux_stats_scatterbox.hxx);
+#   2  post-scatter cos(theta) first moment vs 0,
+#      sigma = sqrt(1/(3 n_ev)) ~ 4.0e-4 at n_ev ~ N_p lambda ~ 2.09e6
+#      (the reused mcnux_stats_emission.hxx isotropy sigma — the
+#      [MCNX-INT-04] scatter draw is the same cos theta = 2 u1 - 1,
+#      phi = 2 pi u2 map as emission);
+#   3  post-scatter phi first moment vs pi, sigma = pi * row-2 sigma
+#      ~ 1.25e-3;
+#   4  exact closure: packets sampled vs N_p at sigma = 1, so z is the raw
+#      packet discrepancy (0 at closure).
+#
+# Pinned values ([MCNX-VER-07]: a benchmark pins its values in its parfile):
+#   N_p       = 1048576 = 2^20 (the scatterbox_num_packets default,
+#               restated — the pinned statistical packet count of
+#               [MCNX-RNG-07]); seeded on a 102^3 cell-center lattice
+#               (102 = ceil(cbrt(2^20)));
+#   seed      = 1296518744 (the pinned primary seed, restated);
+#   E         = 10 MeV (monoenergetic; the Poisson count law is
+#               energy-independent for gray kappa_s0: p^t/nu = 1 at rest);
+#   h         = 0.4 (scatterbox_half_width: the seeding cube [-0.4, 0.4]^3,
+#               strictly inside the domain);
+#   kappa_s0  = 2.7e-5 cm^-1 -> kappa_code = 2.7e-5 * 1.476625038e5
+#               ~ 3.98689 (the pinned cgs->code factor), so
+#               lambda = kappa_code * 0.5 ~ 1.99344 and the expected
+#               realized event count is N_p lambda ~ 2.09e6.
+#
+# ONE transport step at the explicit binary-exact timestep dt = 0.5 (l_path
+# = 0.5): the maximum single-step displacement is the path length 0.5, so
+# the farthest reachable coordinate is h + 0.5 = 0.9 < 1.0 — ZERO escapes
+# by construction (and kappa_a = 0 -> Delta t_a = +inf -> zero absorptions;
+# the writer hard-errors if either appears). Episode load per packet is
+# ~ lambda + ~4 cell crossings + 1 step end ~ 7 episodes, far under the
+# driver's 10000 cap.
+#
+# Every per-packet mirror stays OFF (their SIZE=8 tables hard-error at the
+# 2^20 packet scale — the scatterbox output is an aggregate reduction, the
+# stats-beam precedent); the ledger closure and id-contract audits are off
+# (scattering-deposit closure and id discipline are covered by the
+# fixed-seed siblings interactions-fixedseed/absorb-smoke at small count).
+# eta_scale[0] = 0 is restated for explicitness even though eta ~ kappa_a0
+# = 0 already vanishes (no emission loop runs anyway: enable_emission is
+# forbidden with the scatterbox by PARAMCHECK).
+#
+# Measured realized totals at capture (confirmed from the episode-driver log
+# line, not assumed): 2092415 scattering events over 5817920 episodes, max
+# 20 episodes/packet, 0 absorption events — consistent with N_p lambda
+# ~ 2090230 (0.9 sigma of the event-count spread); every row passed
+# |z| <= 4 at the primary seed (max |z| = 1.48, the Poisson sample-mean
+# row).
+#
+# ODESolvers must be active: ADMBaseX and HydroBaseX initial data are both
+# scheduled IN ODESolvers_Initial, and the driver reads metric and fluid.
+
+ActiveThorns = "
+    CarpetX
+    IOUtil
+    ODESolvers
+    ADMBaseX
+    HydroBaseX
+    MCNuX
+    TestMCNuX
+"
+
+# Mandatory for any MCNuX run: CarpetX's own CCTK_PARAMCHECK routine rejects
+# every other presync mode.
+Cactus::presync_mode = "mixed-error"
+
+# The subject of this benchmark: the deterministic lattice fixture resolved
+# by the episode driver, reduced by the scatterbox statistical writer. All
+# other verification scaffolding is off.
+MCNuX::enable_interactions = yes
+MCNuX::test_stats_scatterbox = yes
+MCNuX::test_stats_beam = no
+MCNuX::enable_emission = no
+MCNuX::test_stats_emission = no
+MCNuX::test_synthetic_packets = no
+MCNuX::test_id_contract = no
+MCNuX::test_escape_tallies = no
+MCNuX::test_emission = no
+MCNuX::test_fluid_gather = no
+MCNuX::test_synthetic_deposit = no
+MCNuX::test_ledger_closure = no
+MCNuX::run_selftests = no
+
+# The pinned primary statistical seed ([MCNX-RNG-07]; the rng_seed default,
+# restated) and the scatterbox fixture pins (all defaults, restated per the
+# pinned-values rule above).
+MCNuX::rng_seed = 1296518744
+MCNuX::scatterbox_num_packets = 1048576
+MCNuX::scatterbox_energy_MeV = 10.0
+MCNuX::scatterbox_half_width = 0.4
+
+# Analytic coefficient source: pure scattering for nu_e (the box's only
+# species). kappa_a0[0] = 0 (its default, restated: Delta t_a = +inf, no
+# absorption ever fires, and eta ~ kappa_a0 vanishes identically);
+# eta_scale[0] = 0 restated for explicitness.
+MCNuX::opacity_source = "analytic"
+MCNuX::kappa_s0[0] = 2.7e-5
+MCNuX::kappa_a0[0] = 0.0
+MCNuX::eta_scale[0] = 0.0
+
+# Flat background: the ADMBaseX defaults, restated.
+ADMBaseX::initial_data = "Cartesian Minkowski"
+ADMBaseX::initial_lapse = "one"
+ADMBaseX::initial_shift = "zero"
+
+# Uniform at-rest fluid everywhere (T0 > 0 keeps the analytic Kirchhoff
+# form well-defined even though eta vanishes at kappa_a0 = 0).
+HydroBaseX::initial_hydro = "equilibration box"
+TestMCNuX::rho0 = 1.0e12
+TestMCNuX::T0 = 5.0
+TestMCNuX::Ye0 = 0.25
+
+# 8^3 cells over the CarpetX default domain [-1, 1]^3 (dx = 0.25): the
+# seeding cube [-0.4, 0.4]^3 spans ~3 cells per axis and every packet stays
+# >= 0.1 from every face after the step.
+CarpetX::ncells_x = 8
+CarpetX::ncells_y = 8
+CarpetX::ncells_z = 8
+
+# ONE step at the explicit binary-exact timestep (see header; never via
+# dtfac — the schwarzschild-pt precedent): it000000 is the defined all-zero
+# snapshot, it000001 the single scattering step reduced into the check rows.
+CarpetX::timestep_choice = "timestep"
+CarpetX::timestep = 0.5
+Cactus::cctk_itlast = 1
+
+IO::out_dir = $parfile
+IO::out_every = 1
+IO::parfile_write = no
+
+# Keep the column-label header but drop IOUtil's creation date, hostname, and
+# absolute parameter-file path (see unit-selftest.par).
+IO::out_fileinfo = "axis labels"
+
+CarpetX::out_metadata = no
+
+# The golden data: the scatterbox statistical-check verdict table only.
+CarpetX::out_tsv_vars = "
+    MCNuX::mcnux_stats_scatterbox_diag
+"

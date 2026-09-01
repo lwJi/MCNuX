@@ -56,8 +56,14 @@
 #include "mcnux_interactions.hxx"
 #include "mcnux_particles.hxx"
 #include "mcnux_srcterms.hxx"
+#include "mcnux_stats.hxx"
+#include "mcnux_stats_beam.hxx"
+#include "mcnux_stats_emission.hxx" // sigma_isotropy_* (scatterbox reuse)
+#include "mcnux_stats_scatterbox.hxx"
+#include "mcnux_stats_writer.hxx"
 #include "mcnux_table_range.hxx"
 #include "mcnux_tetrad.hxx"
+#include "mcnux_trp.hxx"
 #include "mcnux_units.hxx"
 
 #include <AMReX_AmrParGDB.H> // completes AmrParGDB (mcnux_geodesic.cxx note)
@@ -69,6 +75,7 @@
 #include <cctk_Arguments.h>
 #include <cctk_Parameters.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <set>
@@ -89,6 +96,21 @@ LedgerAudit g_interaction_audit{};
 // the cap turns even that into a plain break instead of a device-side hang.
 constexpr int max_episodes_per_step = 10000;
 
+// Run-cumulative absorption-event count (the escape_run_tally() mechanism:
+// per-step += at the audit fold below, never reset). Consumer:
+// MCNuX_StatsBeam's exact count-closure row — with a single-species
+// pure-absorber beam the single scalar is the whole absorbed tally.
+double g_absorbed_run_count = 0.0;
+
+// Run-cumulative scattering-statistics accumulator of the stats-scatterbox
+// benchmark (the g_absorbed_run_count mechanism above: per-step += at the
+// fold below, never reset; populated only under test_stats_scatterbox).
+// Slot layout: 0 Sum k (scattering events, k the per-packet count),
+// 1 Sum k^2, 2 packets sampled, 3 Sum cos theta, 4 Sum phi (per-event
+// post-scatter draw values). Consumer: MCNuX_StatsScatterbox below.
+constexpr int scatterbox_num_slots = 5;
+double g_scatterbox_run[scatterbox_num_slots] = {};
+
 } // namespace
 
 LedgerAudit &interaction_step_audit() { return g_interaction_audit; }
@@ -104,11 +126,14 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
   // safe because MCNuX_ParamCheck forbids enable_interactions with
   // opacity_source = "table", so the Analytic branch of
   // evaluate_coefficients never invokes it; its clamp counters stay null
-  // (host counters are not device-safe). [MCNX-INT-05]: this single narrow
-  // evaluate_coefficients expression is where the trapped-regime relabeling
-  // of mcnux_trp.hxx substitutes in a later task.
+  // (host counters are not device-safe). [MCNX-INT-05]: the single narrow
+  // evaluate_coefficients expression below is where the trapped-regime
+  // relabeling of mcnux_trp.hxx substitutes (event-sampling law only,
+  // [MCNX-TRP-02]) when trapped_scheme = "relabeled"; with the default
+  // explicit scheme the sampling expressions are byte-for-byte the baseline.
   const CoefficientSource src = selected_coefficient_source();
   const AnalyticOpacityParams ap = analytic_params_from_parameters();
+  const TrpParams trp = trp_params_from_parameters();
   const RangedTableCoefficients table_eval{};
 
   const std::uint64_t S = static_cast<std::uint64_t>(rng_seed);
@@ -134,6 +159,16 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
   amrex::Gpu::DeviceVector<double> esc_dev(escape_num_slots, 0.0);
   double *const esc_ptr = esc_dev.data();
 
+  // Step-scoped scattering-statistics buffer of the stats-scatterbox
+  // benchmark ([MCNX-INT-02]/[MCNX-INT-04], [MCNX-VER-07]; slot layout at
+  // g_scatterbox_run above). The pointer is NULL unless
+  // test_stats_scatterbox, and the kernel branches on the pointer, so the
+  // default path performs zero additional FP operations and every
+  // pre-existing benchmark's golden data stays bitwise-identical.
+  amrex::Gpu::DeviceVector<double> sb_dev(
+      test_stats_scatterbox ? scatterbox_num_slots : 0, 0.0);
+  double *const sb_ptr = test_stats_scatterbox ? sb_dev.data() : nullptr;
+
   for_each_packet_tile_raw([&](const CarpetX::GHExt::PatchData &patchdata,
                                const CarpetX::GHExt::PatchData::LevelData
                                    &leveldata,
@@ -149,6 +184,13 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
         make_gather(patchdata, leveldata, mgroups, pti);
     const CellFluidGather fgather =
         make_fluid_gather(patchdata, leveldata, hgroups, pti);
+
+    // Cell light-crossing time of the [MCNX-TRP-04] alpha selection: code
+    // units with c = 1, so Dt_c = min_d dx_d. Uniform over the tile (one
+    // level's geometry), computed host-side and captured by value; consumed
+    // only on the relabeled branch below.
+    const double trp_dt_c =
+        std::min(fgather.dx[0], std::min(fgather.dx[1], fgather.dx[2]));
 
     // Source views of the SAME box: CarpetX builds the group MultiFabs on
     // the AmrCore's BoxArray/DistributionMapping — the ones the ParGDB
@@ -192,6 +234,10 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
       // packet's p^t is evaluated on a metric gather that never leaves
       // the domain.
       double x_last_inside[3] = {x[0], x[1], x[2]};
+      // Loop-local per-packet scattering-event counter of the
+      // stats-scatterbox benchmark (a plain register, no per-packet storage
+      // and no new counter surface; integer-only on the default path).
+      int n_scat = 0;
       int it = 0;
       for (; it < max_episodes_per_step && dt_rem > 0.0; ++it) {
         if (!outside_domain(x, mgather.prob_lo, mgather.prob_hi)) {
@@ -262,14 +308,38 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
         const double kappa_s_code = opacity_cgs_to_code(co.kappa_s);
         const double kappa_a_code = opacity_cgs_to_code(co.kappa_a);
 
+        // Trapped-regime relabeling ([MCNX-TRP-02], event-sampling law
+        // substitution point): with trapped_scheme = "relabeled", alpha per
+        // (cell, species, energy bin) is the [MCNX-TRP-04] selection rule on
+        // the UNPRIMED code-unit kappa_a (or the fixed-alpha override), and
+        // the primed pair feeds the two interaction_time draws below —
+        // NOWHERE else: the RNG draw sites are scheme-independent (the
+        // [MCNX-TRP-05] alpha = 1 bitwise obligation), and every deposit,
+        // audit, and tally keeps the actual fired event's quantities. On the
+        // default explicit branch these are bitwise copies (zero FP ops).
+        double kappa_a_samp = kappa_a_code;
+        double kappa_s_samp = kappa_s_code;
+        if (trp.relabeled) {
+          const double alpha =
+              (trp.alpha_fixed > 0.0)
+                  ? trp.alpha_fixed
+                  : alpha_select(kappa_a_code, trp_dt_c, trp.xi);
+          // Map by NAME (RelabeledCoefficients field order differs from
+          // Coefficients); the eta slot is unused in the sampling law.
+          const RelabeledCoefficients rc =
+              relabel(0.0, kappa_a_code, kappa_s_code, alpha);
+          kappa_a_samp = rc.kappa_a_p;
+          kappa_s_samp = rc.kappa_s_p;
+        }
+
         // (4) [MCNX-INT-06]: both channel draws ALWAYS consumed; the
         // cell-exit bound uses the FROZEN episode-start coordinate velocity
         // and the episode cell's faces from above.
         const EpisodeUniforms eu = episode_uniforms(S, q, e);
         const double dt_s =
-            interaction_time(eu.u_s, pt_up, kappa_s_code, nu_code);
+            interaction_time(eu.u_s, pt_up, kappa_s_samp, nu_code);
         const double dt_a =
-            interaction_time(eu.u_a, pt_up, kappa_a_code, nu_code);
+            interaction_time(eu.u_a, pt_up, kappa_a_samp, nu_code);
         // The exit bound is inflated by a few ulps (an implementation-
         // freedom choice like the entry adjustment above): the RK4 segment
         // of an exactly-computed dt_exit can land roundoff-SHORT of the
@@ -334,6 +404,18 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
         // episode-start tetrad/metric/nu. p_in is the packet's p_i at
         // event time (post-segment) with the frozen episode p^t.
         const ScatterUniforms su = scatter_uniforms(S, q, e);
+        ++n_scat;
+        if (sb_ptr != nullptr) {
+          // Per-event isotropy accumulation of the stats-scatterbox
+          // benchmark ([MCNX-INT-04]): recompute the draw-map values
+          // cos theta = 2 u1 - 1 and phi = 2 pi u2 right at the draw site
+          // (the mcnux_emission.cxx recomputation idiom — no new draws, no
+          // new pure functions; scatter_redraw below consumes the SAME
+          // uniforms).
+          amrex::Gpu::Atomic::AddNoRet(&sb_ptr[3], 2.0 * su.u1 - 1.0);
+          amrex::Gpu::Atomic::AddNoRet(&sb_ptr[4],
+                                       2.0 * detail::pi * su.u2);
+        }
         const Tetrad tet = build_tetrad(ms.alpha, ms.beta, ms.g, u4);
         const SpacetimeMetric gm =
             spacetime_metric_from_adm(ms.alpha, ms.beta, ms.g);
@@ -365,6 +447,17 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
       }
 
       amrex::Gpu::Atomic::Max(&audit_ptr[12], double(it + 1));
+
+      // Fold this packet's per-step scattering statistics into the gated
+      // step buffer (Sum k, Sum k^2, packets sampled): the [MCNX-INT-02]
+      // Poisson observable of the stats-scatterbox benchmark. Runs for
+      // every packet that entered the episode loop, whatever ended it.
+      if (sb_ptr != nullptr) {
+        const double k = double(n_scat);
+        amrex::Gpu::Atomic::AddNoRet(&sb_ptr[0], k);
+        amrex::Gpu::Atomic::AddNoRet(&sb_ptr[1], k * k);
+        amrex::Gpu::Atomic::AddNoRet(&sb_ptr[2], 1.0);
+      }
 
       // Escape check ([MCNX-GPU-05], mcnux_escape.hxx): a packet whose
       // final position left the domain is tallied per species and removed
@@ -412,6 +505,7 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
                           audit_host[3], audit_host[4]};
   audit.gross = LedgerDelta{audit_host[5], audit_host[6], audit_host[7],
                             audit_host[8], audit_host[9]};
+  g_absorbed_run_count += audit_host[13]; // run-cumulative (stats-beam)
 
   // Fold the step's escapes into the run-cumulative tally ([MCNX-GPU-05];
   // NOT part of the ledger audit above — escapes deposit nothing and never
@@ -421,6 +515,17 @@ extern "C" void MCNuX_EpisodeDriver(CCTK_ARGUMENTS) {
     amrex::Gpu::copy(amrex::Gpu::deviceToHost, esc_dev.begin(), esc_dev.end(),
                      esc_host.begin());
     escape_run_tally().add_slots(esc_host.data());
+  }
+
+  // Fold the step's scattering statistics into the run-cumulative
+  // accumulator (the stats-scatterbox benchmark; the g_absorbed_run_count
+  // mechanism — never reset). Skipped entirely on the default path.
+  if (test_stats_scatterbox) {
+    std::vector<double> sb_host(scatterbox_num_slots, 0.0);
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost, sb_dev.begin(), sb_dev.end(),
+                     sb_host.begin());
+    for (int i = 0; i < scatterbox_num_slots; ++i)
+      g_scatterbox_run[i] += sb_host[i];
   }
 
   CCTK_VINFO("MCNuX episode driver: %ld episodes, %ld scattering events, "
@@ -531,6 +636,220 @@ extern "C" void MCNuX_IdContractCheck(CCTK_ARGUMENTS) {
   CCTK_VINFO("MCNuX id-contract check: %zu live, %zu ever live, %zu retired "
              "(all [MCNX-GPU-04] assertions passed)",
              prev_live.size(), ever_live.size(), retired.size());
+}
+
+// ---------------------------------------------------------------------------
+// Statistical-reduction writer  (MCNuX::mcnux_stats_beam_diag)
+// ---------------------------------------------------------------------------
+// The `stats-beam` benchmark writer ([MCNX-INT-01]/[MCNX-INT-03],
+// specs/neutrino-matter-interactions.md:197-200; [MCNX-VER-07],
+// verification-suite-design.md:265): reduce the episode driver's
+// pure-absorber beam step into (estimate, expected, sigma, z) rows through
+// the frozen MCNuX::zscore() (called verbatim, never reimplemented) and the
+// shared StatsDiagView scaffold. Sigma formulas are benchmark-owned
+// (mcnux_stats_beam.hxx), never added to mcnux_stats.hxx (its binding
+// non-goal). Acceptance |z| <= 4 is judged once at golden capture;
+// thereafter the archived z values are golden numbers diffed at 1e-12.
+//
+// Row layout (SIZE=2):
+//   0  transmitted packet count vs N_p exp(-kappa_a L): estimate = the
+//      [MCNX-GPU-05] escape-tally count of the beam species (nu_e — with
+//      kappa_s = 0 every non-absorbed packet provably reaches the far face:
+//      the Dt_s = +inf branch of interaction_time), expected = N_p p with
+//      p = p_transmission(kappa_code, L_code), sigma = sqrt(N_p p (1 - p))
+//      (binomial; mcnux_stats_beam.hxx). kappa_code comes from kappa_a0[0]
+//      (cgs cm^-1) via opacity_cgs_to_code — never a retyped literal — and
+//      L_code = x_hi - beam_x0 from the SAME level geometry whose
+//      (prob_lo, prob_hi) drive the driver's outside_domain escape check.
+//   1  exact count closure: estimate = transmitted + absorbed,
+//      expected = N_p, sigma = 1.0 — so z is the raw packet discrepancy
+//      (0 at closure; sigma = 1 avoids the sigma = 0 z pathology of an
+//      exact check). The [MCNX-INT-03] discreteness observable: every
+//      packet is resolved whole, absorbed-or-escaped, within the step.
+//
+// Both tallies are RUN-CUMULATIVE (escape_run_tally() and
+// g_absorbed_run_count above), which equals the per-step value here: the
+// benchmark runs exactly ONE transport step. The AT initial leg keeps the
+// deterministic zero fill (no transport has run).
+extern "C" void MCNuX_StatsBeam(CCTK_ARGUMENTS) {
+  DECLARE_CCTK_ARGUMENTS_MCNuX_StatsBeam;
+  DECLARE_CCTK_PARAMETERS;
+
+  require_driver();
+
+  constexpr int expected_rows = 2;
+  const int nrows = diag_array_size("MCNuX::mcnux_stats_beam_diag");
+  if (nrows != expected_rows)
+    CCTK_VERROR("MCNuX::mcnux_stats_beam_diag has SIZE=%d but MCNuX_StatsBeam "
+                "writes %d check rows; the two must agree "
+                "(MCNuX/interface.ccl)",
+                nrows, expected_rows);
+
+  const StatsDiagView view{sbeam_estimate, sbeam_expected, sbeam_sigma,
+                           sbeam_z, nrows};
+  view.zero_fill();
+
+  const auto put = [&](int r, const ZScore &zs) {
+    view.put(r, zs);
+    CCTK_VINFO("MCNuX stats-beam row %d: estimate = %.17g, expected = %.17g, "
+               "sigma = %.17g, z = %.17g  %s",
+               r, zs.estimate, zs.expected, zs.sigma, zs.z,
+               zs.pass ? "PASS" : "FAIL");
+  };
+
+  // In-step only (the AT initial leg keeps the zero fill above).
+  if (cctk_iteration > 0) {
+    // Slab length along the beam: the far x face minus the seed plane, on
+    // the patch-0 level-0 geometry (single-patch unigrid benchmark; the
+    // driver's escape predicate uses the same ProbLo/ProbHi).
+    const amrex::Geometry &geom =
+        CarpetX::ghext->patchdata.at(0).amrcore->Geom(0);
+    const double L_code = geom.ProbHi(0) - beam_x0;
+    const double kappa_code = opacity_cgs_to_code(kappa_a0[0]);
+    if (!(kappa_code > 0.0) || !(L_code > 0.0))
+      CCTK_VERROR("MCNuX stats-beam needs kappa_a0[0] > 0 and beam_x0 < x_hi "
+                  "(got kappa_code = %.17g, L_code = %.17g): a degenerate "
+                  "transmission probability p in {0, 1} has sigma = 0 and no "
+                  "statistical content ([MCNX-VER-07])",
+                  kappa_code, L_code);
+
+    const double N_p = double(beam_num_packets);
+    const double p = p_transmission(kappa_code, L_code);
+    const double transmitted =
+        escape_run_tally().v[escape_slot(0, escape_channel_count)];
+    const double absorbed = g_absorbed_run_count;
+
+    put(0, zscore(transmitted, N_p * p, sigma_beam_transmission(N_p, p)));
+    put(1, zscore(transmitted + absorbed, N_p, 1.0));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Statistical-reduction writer  (MCNuX::mcnux_stats_scatterbox_diag)
+// ---------------------------------------------------------------------------
+// The `stats-scatterbox` benchmark writer ([MCNX-INT-02]/[MCNX-INT-04],
+// specs/neutrino-matter-interactions.md:201-207; [MCNX-VER-07],
+// verification-suite-design.md:266): reduce the episode driver's uniform
+// pure-scattering box step into (estimate, expected, sigma, z) rows through
+// the frozen MCNuX::zscore() (called verbatim, never reimplemented) and the
+// shared StatsDiagView scaffold. Poisson sigma formulas are benchmark-owned
+// (mcnux_stats_scatterbox.hxx, never mcnux_stats.hxx — its binding
+// non-goal); the isotropy sigmas are the REUSED sigma_isotropy_* pair of
+// mcnux_stats_emission.hxx (identical draw distribution, see that header).
+// Acceptance |z| <= 4 is judged once at golden capture; thereafter the
+// archived z values are golden numbers diffed at 1e-12.
+//
+// The Poisson expectation: l_path := c * Delta t of the SINGLE transport
+// step = cctk_delta_time in code units (the pinned operational definition —
+// a null packet on the at-rest Minkowski background moves at coordinate
+// speed 1 through every scattering direction change), and
+// lambda = kappa_s_code * l_path with kappa_s_code =
+// opacity_cgs_to_code(kappa_s0[0]) — the episode driver's own conversion
+// path for the analytic nu_e coefficients, never a retyped literal. The
+// per-cell episode redraw is statistically exact by memorylessness in the
+// uniform medium, so per-packet counts are exactly Poisson(lambda)
+// (mcnux_stats_scatterbox.hxx).
+//
+// Row layout (SIZE=5; n_ev = Sum k the realized scattering-event count):
+//   0  Poisson sample mean: kbar = Sum k / N_p vs lambda,
+//      sigma = sigma_poisson_mean(lambda, N_p);
+//   1  Poisson unbiased sample variance:
+//      S^2 = (Sum k^2 - N_p kbar^2)/(N_p - 1) vs lambda,
+//      sigma = sigma_poisson_variance(lambda, N_p) (documented large-N
+//      leading order (lambda + 2 lambda^2)/N_p);
+//   2  post-scatter isotropy, cos theta first moment: Sum cos theta / n_ev
+//      vs 0, sigma = sigma_isotropy_costheta(n_ev);
+//   3  post-scatter isotropy, phi first moment: Sum phi / n_ev vs pi,
+//      sigma = sigma_isotropy_phi(n_ev);
+//   4  exact closure: packets sampled vs N_p at sigma = 1, so z is the raw
+//      packet discrepancy (0 at closure; the sigma = 1 convention of the
+//      beam's closure row).
+//
+// The accumulator is RUN-CUMULATIVE (g_scatterbox_run above), which equals
+// the per-step value here: the benchmark runs exactly ONE transport step.
+// The AT initial leg keeps the deterministic zero fill. Hard errors on the
+// three outcomes the design proves impossible (zero realized events, any
+// absorption, any escape): each would silently bias the statistics, so a
+// violated design assumption must abort rather than mis-capture.
+extern "C" void MCNuX_StatsScatterbox(CCTK_ARGUMENTS) {
+  DECLARE_CCTK_ARGUMENTS_MCNuX_StatsScatterbox;
+  DECLARE_CCTK_PARAMETERS;
+
+  require_driver();
+
+  constexpr int expected_rows = 5;
+  const int nrows = diag_array_size("MCNuX::mcnux_stats_scatterbox_diag");
+  if (nrows != expected_rows)
+    CCTK_VERROR("MCNuX::mcnux_stats_scatterbox_diag has SIZE=%d but "
+                "MCNuX_StatsScatterbox writes %d check rows; the two must "
+                "agree (MCNuX/interface.ccl)",
+                nrows, expected_rows);
+
+  const StatsDiagView view{sscat_estimate, sscat_expected, sscat_sigma,
+                           sscat_z, nrows};
+  view.zero_fill();
+
+  const auto put = [&](int r, const ZScore &zs) {
+    view.put(r, zs);
+    CCTK_VINFO("MCNuX stats-scatterbox row %d: estimate = %.17g, expected = "
+               "%.17g, sigma = %.17g, z = %.17g  %s",
+               r, zs.estimate, zs.expected, zs.sigma, zs.z,
+               zs.pass ? "PASS" : "FAIL");
+  };
+
+  // In-step only (the AT initial leg keeps the zero fill above).
+  if (cctk_iteration > 0) {
+    const double kappa_code = opacity_cgs_to_code(kappa_s0[0]);
+    const double l_path = cctk_delta_time; // c dt, code units (c = 1)
+    const double lambda = kappa_code * l_path;
+    const double N_p = double(scatterbox_num_packets);
+    if (!(lambda > 0.0) || !(N_p > 1.0))
+      CCTK_VERROR("MCNuX stats-scatterbox needs kappa_s0[0] > 0, dt > 0, and "
+                  "at least two packets (got lambda = %.17g, N_p = %.17g): a "
+                  "zero-rate box has sigma = 0 and no statistical content, "
+                  "and the unbiased variance needs N_p - 1 > 0 "
+                  "([MCNX-VER-07])",
+                  lambda, N_p);
+
+    const double sum_k = g_scatterbox_run[0];
+    const double sum_k2 = g_scatterbox_run[1];
+    const double sampled = g_scatterbox_run[2];
+    const double sum_costheta = g_scatterbox_run[3];
+    const double sum_phi = g_scatterbox_run[4];
+
+    // Design guarantees of the benchmark (kappa_a = 0, seeding cube +
+    // path length strictly inside the domain): no absorption, no escape,
+    // and a nonzero realized event count. Any violation biases the Poisson
+    // and isotropy statistics — hard error, never a silent mis-capture.
+    if (!(sum_k > 0.0))
+      CCTK_VERROR("MCNuX stats-scatterbox realized ZERO scattering events "
+                  "(expected ~ N_p lambda = %.17g): the pure-scattering box "
+                  "produced no statistics to reduce",
+                  N_p * lambda);
+    if (g_absorbed_run_count != 0.0)
+      CCTK_VERROR("MCNuX stats-scatterbox counted %.17g absorption events, "
+                  "but the pure-scattering design (kappa_a0 = 0 -> "
+                  "Delta t_a = +inf) proves zero are reachable",
+                  g_absorbed_run_count);
+    double escaped = 0.0;
+    for (int i = 0; i < escape_num_slots; ++i)
+      escaped += escape_run_tally().v[i];
+    if (escaped != 0.0)
+      CCTK_VERROR("MCNuX stats-scatterbox tallied nonzero escapes (slot sum "
+                  "%.17g), but the seeding-cube + path-length construction "
+                  "(h + c dt inside the domain half-width) proves zero are "
+                  "reachable",
+                  escaped);
+
+    const double kbar = sum_k / N_p;
+    const double svar = (sum_k2 - N_p * kbar * kbar) / (N_p - 1.0);
+
+    put(0, zscore(kbar, lambda, sigma_poisson_mean(lambda, N_p)));
+    put(1, zscore(svar, lambda, sigma_poisson_variance(lambda, N_p)));
+    put(2, zscore(sum_costheta / sum_k, 0.0, sigma_isotropy_costheta(sum_k)));
+    put(3, zscore(sum_phi / sum_k, detail::pi, sigma_isotropy_phi(sum_k)));
+    put(4, zscore(sampled, N_p, 1.0));
+  }
 }
 
 } // namespace MCNuX
