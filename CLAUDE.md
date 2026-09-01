@@ -69,7 +69,7 @@ Compiled sources:
 
 ## Testing
 
-- `MCNuX/test/` is the Cactus test home: `test.ccl` (`NPROCS 1`), `<name>.par` parfiles, `<name>/` golden dirs. Current tests: `unit-selftest`, `source-zero-add`, `minkowski-freestream`, `schwarzschild-id`, `hydro-sphere-id`, `hydro-sphere-gather`, `emit-smoke`, `interactions-fixedseed`, `absorb-smoke`, `emission-fixedseed`, `schwarzschild-pt{,-dt2,-dt4}`, `stats-emission`, `escape-freestream`.
+- `MCNuX/test/` is the Cactus test home: `test.ccl` (`NPROCS 1`), `<name>.par` parfiles, `<name>/` golden dirs. Current tests: `unit-selftest`, `source-zero-add`, `minkowski-freestream`, `schwarzschild-id`, `hydro-sphere-id`, `hydro-sphere-gather`, `emit-smoke`, `interactions-fixedseed`, `absorb-smoke`, `emission-fixedseed`, `schwarzschild-pt{,-dt2,-dt4}`, `stats-emission`, `escape-freestream`, `trp-alpha-limit-{explicit,relabeled}`.
 - Golden TSVs are copied verbatim from sandbox harness runs, never hand-authored. Harness discovery: a `test/<name>.par` is only runnable once its golden dir `test/<name>/` exists; the first run against an empty golden dir is the capture step (vacuous "0 files identical").
 - Parfile requirements: every MCNuX parfile needs `Cactus::presync_mode = "mixed-error"` and both `ADMBaseX` and `HydroBaseX` in `ActiveThorns` (MCNuX `INHERITS: ADMBaseX HydroBaseX`); runs that read the metric also need `ODESolvers` active (ADMBaseX initial data is scheduled only `IN ODESolvers_Initial`).
 - CarpetX/AMReX rejects domains < 8 cells per direction (blocking_factor); off-origin test boxes must set `IO::out_{x,y,z}line_*` inside the domain.
